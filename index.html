@@ -142,6 +142,8 @@
       <div class="muted" id="bulkCount" style="margin-top:6px"></div>
       <div class="row-actions">
         <button class="btn" id="btnBulk">Generate All</button>
+        <label style="margin:0 4px 0 0">Parallel</label>
+        <select id="conc" style="width:auto"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select>
         <a class="dl" id="zipLink" href="#" style="display:none">⬇ Download all (ZIP)</a>
         <span class="status" id="stBulk"></span>
       </div>
@@ -522,18 +524,32 @@ $('btnBulk').addEventListener('click', async () => {
   if(!rows.length){ setStatus($('stBulk'), 'No non-empty text rows.', 'err'); return; }
   $('bulkResults').innerHTML = ''; $('zipLink').style.display='none';
   $('btnBulk').disabled = true;
-  let done = 0, ok = 0;
-  for(let k=0;k<rows.length;k++){
-    const text = rows[k][ti];
-    let nm = sanitizeName((rows[k][ni]||'').trim()) || ('row'+(k+1));
-    const filename = nm + suffix + '.wav';
-    makeRow(k, filename, text);
-    setStatus($('stBulk'), 'Generating '+(k+1)+' / '+rows.length+'…', 'busy');
-    setStatus($('bst_'+k), 'Generating…', 'busy');
-    try{ const j = await renderOne(text, nm + suffix); setRowAudio(k, j); setStatus($('bst_'+k), '✓ '+j.duration+'s', 'ok'); ok++; }
-    catch(e){ setStatus($('bst_'+k), '✗ '+e.message, 'err'); }
-    done++;
+  const conc = Math.max(1, parseInt($('conc').value) || 3);
+
+  // create all cards up front, in order
+  const items = rows.map((r, k) => {
+    const text = r[ti];
+    const nm = sanitizeName((r[ni]||'').trim()) || ('row'+(k+1));
+    const base = nm + suffix;
+    makeRow(k, base + '.wav', text);
+    setStatus($('bst_'+k), 'Queued…', '');
+    return { k, base };
+  });
+
+  // worker pool: up to `conc` renders in flight at once
+  let next = 0, done = 0, ok = 0;
+  async function worker(){
+    while(next < items.length){
+      const it = items[next++];
+      setStatus($('bst_'+it.k), 'Generating…', 'busy');
+      try{ const j = await renderOne($('btxt_'+it.k).value, it.base); setRowAudio(it.k, j); setStatus($('bst_'+it.k), '✓ '+j.duration+'s', 'ok'); ok++; }
+      catch(e){ setStatus($('bst_'+it.k), '✗ '+e.message, 'err'); }
+      done++;
+      setStatus($('stBulk'), 'Generating '+done+' / '+items.length+'…  ('+conc+' at a time)', 'busy');
+    }
   }
+  await Promise.all(Array.from({length: Math.min(conc, items.length)}, () => worker()));
+
   $('btnBulk').disabled = false;
   setStatus($('stBulk'), '✓ Done — '+ok+' / '+done+' generated', ok===done?'ok':'err');
   if(ok>0){ $('zipLink').href = '/api/bulk-zip?sid='+encodeURIComponent(SID); $('zipLink').style.display='inline'; }

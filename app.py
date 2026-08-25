@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import os, io, re, wave, subprocess, shutil
+import os, io, re, wave, subprocess, shutil, uuid
 import numpy as np
 import requests
 from flask import Flask, request, jsonify, send_file, send_from_directory
@@ -111,7 +111,7 @@ def xml_escape(t):
 # ---------------------------------------------------------------------------
 # TTS engines  -> return (float samples @44100 mono, error)
 # ---------------------------------------------------------------------------
-def tts_elevenlabs(d, sid):
+def tts_elevenlabs(d, sid, tag="t"):
     voice_id = (d.get("voice_id") or "").strip()
     text = (d.get("text") or "").strip()
     if not voice_id or not text:
@@ -133,15 +133,19 @@ def tts_elevenlabs(d, sid):
         return None, f"Request failed: {e}"
     if r.status_code != 200:
         return None, f"ElevenLabs error {r.status_code}: {r.text[:300]}"
-    tmp = os.path.join(GEN_DIR, f"{sid}_el_tmp.wav")
+    tmp = os.path.join(GEN_DIR, f"{sid}_{tag}_el.wav")
     with open(tmp, "wb") as f:
         f.write(pcm_to_wav(r.content))
-    return resample_mono_44100(tmp), None
+    try:
+        return resample_mono_44100(tmp), None
+    finally:
+        try: os.remove(tmp)
+        except OSError: pass
 
 
 AZURE_STYLE_NONE = "(none)"
 
-def tts_azure(d, sid):
+def tts_azure(d, sid, tag="t"):
     text = (d.get("text") or "").strip()
     voice = (d.get("azure_voice") or "en-US-JennyNeural").strip()
     if not text:
@@ -176,10 +180,14 @@ def tts_azure(d, sid):
         return None, f"Request failed: {e}"
     if r.status_code != 200:
         return None, f"Azure error {r.status_code}: {r.text[:300]}"
-    tmp = os.path.join(GEN_DIR, f"{sid}_az_tmp.wav")
+    tmp = os.path.join(GEN_DIR, f"{sid}_{tag}_az.wav")
     with open(tmp, "wb") as f:
         f.write(r.content)
-    return resample_mono_44100(tmp), None
+    try:
+        return resample_mono_44100(tmp), None
+    finally:
+        try: os.remove(tmp)
+        except OSError: pass
 
 
 # ---------------------------------------------------------------------------
@@ -269,13 +277,13 @@ FORMATS = {
 }
 
 
-def synth(d, sid):
+def synth(d, sid, tag="t"):
     """Dispatch to the chosen TTS engine -> (float samples @44100 mono, error)."""
     engine = (d.get("engine") or "elevenlabs").lower()
-    return tts_azure(d, sid) if engine == "azure" else tts_elevenlabs(d, sid)
+    return tts_azure(d, sid, tag) if engine == "azure" else tts_elevenlabs(d, sid, tag)
 
 
-def mix_and_encode(sid, speech, use_music, music_vol, fmt, out_base):
+def mix_and_encode(sid, speech, use_music, music_vol, fmt, out_base, tag="t"):
     """Mix optional music bed under speech and encode to the target format.
     Returns (out_name, download_name, duration, error)."""
     if fmt not in FORMATS:
@@ -301,11 +309,13 @@ def mix_and_encode(sid, speech, use_music, music_vol, fmt, out_base):
             if peak > 32767:
                 mix *= 32767.0 / peak
 
-    tmp = os.path.join(GEN_DIR, f"{sid}_mix_tmp.wav")
+    tmp = os.path.join(GEN_DIR, f"{sid}_{tag}_mix.wav")
     write_wav_int16(tmp, mix)
     out_path = os.path.join(GEN_DIR, out_name)
     cmd = [FFMPEG, "-y", "-i", tmp] + FORMATS[fmt] + ["-fflags", "+bitexact", out_path]
     p = subprocess.run(cmd, capture_output=True, text=True)
+    try: os.remove(tmp)
+    except OSError: pass
     if p.returncode != 0:
         return None, None, None, f"ffmpeg failed: {p.stderr[-300:]}"
     return out_name, f"{out_base}.wav", round(N / float(SAMPLE_RATE), 2), None
@@ -334,13 +344,14 @@ def api_render():
     Used by the Bulk tab and per-row regeneration."""
     d = request.get_json(force=True)
     sid = clean_sid(d.get("sid"))
-    samples, err = synth(d, sid)
+    tag = uuid.uuid4().hex[:8]  # unique temp namespace so 3-at-a-time renders don't collide
+    samples, err = synth(d, sid, tag)
     if err:
         return jsonify(error=err), 502
     out_name, dl, dur, err = mix_and_encode(
         sid, samples, bool(d.get("use_music")),
         float(d.get("music_volume", 15)) / 100.0,
-        d.get("format", "pcm_8000"), d.get("output_name") or "output")
+        d.get("format", "pcm_8000"), d.get("output_name") or "output", tag)
     if err:
         return jsonify(error=err), 500
     return jsonify(file=out_name, download_name=dl, duration=dur, format=d.get("format", "pcm_8000"))
