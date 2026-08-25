@@ -48,11 +48,15 @@
   .status{font-size:14px}
   .status.ok{color:var(--ok)} .status.err{color:var(--err)} .status.busy{color:var(--busy)}
   audio{width:100%;margin-top:16px}
-  .seg{display:inline-flex;background:var(--card2);border-radius:12px;padding:3px;gap:3px;margin-bottom:4px}
-  .seg button{background:transparent;color:var(--txt);border:none;border-radius:9px;padding:9px 22px;
-    font:inherit;font-size:14px;font-weight:500;cursor:pointer;transition:background .15s,box-shadow .15s}
-  .seg button.active{background:var(--card);box-shadow:0 1px 4px rgba(0,0,0,.12);font-weight:590}
-  @media (prefers-color-scheme: dark){ .seg button.active{background:#48484a} }
+  .seg{position:relative;display:inline-flex;background:var(--card2);border-radius:12px;padding:3px;gap:3px;margin-bottom:4px}
+  .seg .thumb{position:absolute;top:3px;bottom:3px;left:3px;width:0;border-radius:9px;background:var(--card);
+    box-shadow:0 1px 4px rgba(0,0,0,.14);z-index:0;pointer-events:none;
+    transition:left .34s cubic-bezier(.32,.72,0,1),width .34s cubic-bezier(.32,.72,0,1)}
+  @media (prefers-color-scheme: dark){ .seg .thumb{background:#48484a} }
+  .seg button{position:relative;z-index:1;background:transparent;color:var(--txt);border:none;border-radius:9px;
+    padding:9px 22px;font:inherit;font-size:14px;font-weight:500;cursor:pointer;
+    transition:color .2s ease;-webkit-tap-highlight-color:transparent}
+  .seg button.active{font-weight:590}
   .slider-row{margin-top:4px}
   .slider-row .top{display:flex;justify-content:space-between;font-size:14px;margin-bottom:6px;font-weight:500}
   .slider-row .val{color:var(--accent2);font-weight:600}
@@ -593,4 +597,23 @@ $('btnBulk').addEventListener('click', async () => {
     $('zipBtn').href = href; $('zipBtn').style.display='inline-block';
   }
 });
+
+/* ---------------- iOS-style sliding segmented controls ---------------- */
+function initSeg(seg){
+  if(!seg) return;
+  const thumb = document.createElement('span');
+  thumb.className = 'thumb';
+  seg.insertBefore(thumb, seg.firstChild);
+  const place = () => {
+    const b = seg.querySelector('button.active') || seg.querySelector('button');
+    if(b){ thumb.style.left = b.offsetLeft + 'px'; thumb.style.width = b.offsetWidth + 'px'; }
+  };
+  seg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => requestAnimationFrame(place)));
+  window.addEventListener('resize', place);
+  requestAnimationFrame(place);
+  seg._place = place;
+}
+['engineSeg','modeTabs'].forEach(id => initSeg($(id)));
+// reposition once fonts/layout settle
+window.addEventListener('load', () => ['engineSeg','modeTabs'].forEach(id => $(id)._place && $(id)._place()));
 </script>
