@@ -43,6 +43,11 @@
 <h1>TTS Studio</h1>
 <p class="sub">Azure &amp; ElevenLabs speech · background music with volume control · PCM output.</p>
 
+<div class="seg" id="modeTabs" style="max-width:820px;margin:0 auto 16px;display:flex">
+  <button data-mode="single" class="active" style="flex:1">Single</button>
+  <button data-mode="bulk" style="flex:1">Bulk (Excel / CSV)</button>
+</div>
+
 <!-- STEP 1: SPEECH -->
 <div class="card">
   <h2>1 · Speech</h2>
@@ -51,8 +56,10 @@
     <button data-engine="azure">Azure</button>
   </div>
 
-  <label>Text</label>
-  <textarea id="text" placeholder="Enter the text to speak…"></textarea>
+  <div id="singleText">
+    <label>Text</label>
+    <textarea id="text" placeholder="Enter the text to speak…"></textarea>
+  </div>
 
   <!-- ElevenLabs panel -->
   <div id="elPanel">
@@ -112,11 +119,35 @@
     </div>
   </div>
 
-  <div class="row-actions">
-    <button class="btn" id="btnSpeech">Generate Speech</button>
-    <span class="status" id="stSpeech"></span>
+  <div id="singleGen">
+    <div class="row-actions">
+      <button class="btn" id="btnSpeech">Generate Speech</button>
+      <span class="status" id="stSpeech"></span>
+    </div>
+    <audio id="auSpeech" controls style="display:none"></audio>
   </div>
-  <audio id="auSpeech" controls style="display:none"></audio>
+
+  <!-- BULK input (shown in Bulk mode) -->
+  <div id="bulkInput" style="display:none">
+    <hr/>
+    <label style="margin-top:0">Upload spreadsheet (.xlsx / .csv)</label>
+    <input type="file" id="sheetFile" accept=".xlsx,.csv"/>
+    <div id="bulkMap" style="display:none;margin-top:12px">
+      <div class="row">
+        <div id="sheetSelWrap" style="display:none"><label>Sheet</label><select id="sheetSel"></select></div>
+        <div><label>Text column</label><select id="colText"></select></div>
+        <div><label>Filename column</label><select id="colName"></select></div>
+        <div><label>Filename suffix</label><input type="text" id="suffix" value="_F" placeholder="e.g. _F"/></div>
+      </div>
+      <div class="muted" id="bulkCount" style="margin-top:6px"></div>
+      <div class="row-actions">
+        <button class="btn" id="btnBulk">Generate All</button>
+        <a class="dl" id="zipLink" href="#" style="display:none">⬇ Download all (ZIP)</a>
+        <span class="status" id="stBulk"></span>
+      </div>
+      <div class="muted" style="margin-top:4px">Uses the engine, voice &amp; parameters above, plus the music and format settings below.</div>
+    </div>
+  </div>
 </div>
 
 <!-- STEP 2: MUSIC -->
@@ -157,26 +188,32 @@
 <!-- STEP 3: EXPORT -->
 <div class="card">
   <h2>3 · Export (PCM)</h2>
-  <div class="row">
-    <div><label>Output format</label>
-      <select id="fmt">
-        <option value="pcm_8000">PCM · 8000 Hz · mono (telephony)</option>
-        <option value="pcm_16000">PCM · 16000 Hz · mono</option>
-        <option value="pcm_44100">PCM · 44100 Hz · mono</option>
-        <option value="alaw_8000">A-law · 8000 Hz · mono</option>
-        <option value="ulaw_8000">µ-law · 8000 Hz · mono</option>
-      </select>
+  <label>Output format <span class="muted">(applies to single and bulk)</span></label>
+  <select id="fmt">
+    <option value="pcm_8000">PCM · 8000 Hz · mono (telephony)</option>
+    <option value="pcm_16000">PCM · 16000 Hz · mono</option>
+    <option value="pcm_44100">PCM · 44100 Hz · mono</option>
+    <option value="alaw_8000">A-law · 8000 Hz · mono</option>
+    <option value="ulaw_8000">µ-law · 8000 Hz · mono</option>
+  </select>
+  <div id="singleExport">
+    <label>Output filename</label><input type="text" id="out_name" value="output_F.wav"/>
+    <div class="row-actions">
+      <button class="btn secondary" id="btnPreview" disabled>▶ Preview mix (listen)</button>
+      <button class="btn secondary" id="btnStopPreview">■ Stop</button>
+      <button class="btn" id="btnExport" disabled>Generate &amp; Export</button>
+      <span class="status" id="stExport"></span>
+      <a class="dl" id="dlLink" href="#" style="display:none" download>⬇ Download</a>
     </div>
-    <div><label>Output filename</label><input type="text" id="out_name" value="output_F.wav"/></div>
+    <audio id="auOut" controls style="display:none"></audio>
   </div>
-  <div class="row-actions">
-    <button class="btn secondary" id="btnPreview" disabled>▶ Preview mix (listen)</button>
-    <button class="btn secondary" id="btnStopPreview">■ Stop</button>
-    <button class="btn" id="btnExport" disabled>Generate &amp; Export</button>
-    <span class="status" id="stExport"></span>
-    <a class="dl" id="dlLink" href="#" style="display:none" download>⬇ Download</a>
-  </div>
-  <audio id="auOut" controls style="display:none"></audio>
+</div>
+
+<!-- BULK RESULTS -->
+<div class="card" id="bulkResultsCard" style="display:none">
+  <h2>Bulk results</h2>
+  <div class="muted" id="bulkResultsHint">Generated files appear here — each is playable, and you can edit the phrase and regenerate.</div>
+  <div id="bulkResults" style="margin-top:12px"></div>
 </div>
 
 <script>
@@ -191,6 +228,33 @@ async function postJSON(url, body){
   const j = await r.json();
   if(!r.ok) throw new Error(j.error || ('HTTP '+r.status));
   return j;
+}
+
+// gather engine + voice settings (shared by single generate, bulk, regenerate)
+function genSettings(){
+  const b = { engine };
+  if(engine === 'elevenlabs'){
+    Object.assign(b, {
+      voice_id: $('el_voice').value, model_id: $('el_model').value,
+      stability: $('el_stab').value, similarity_boost: $('el_sim').value,
+      style: $('el_style').value, speed: $('el_speed').value,
+      apply_text_normalization: $('el_norm').checked ? 'auto' : 'off',
+      api_key: $('el_key').value
+    });
+  } else {
+    Object.assign(b, {
+      azure_voice: $('az_voice').value, azure_locale: $('az_locale').value,
+      azure_style: $('az_style').value, azure_style_degree: $('az_deg').value,
+      azure_rate: $('az_rate').value, azure_key: $('az_key').value, azure_region: $('az_region').value
+    });
+  }
+  return b;
+}
+function exportSettings(){
+  return {
+    use_music: document.querySelector('input[name=msrc]:checked').value !== 'none',
+    music_volume: $('mvol').value, format: $('fmt').value
+  };
 }
 
 // engine toggle
@@ -218,22 +282,7 @@ $('btnSpeech').addEventListener('click', async () => {
   const btn = $('btnSpeech'); btn.disabled = true;
   setStatus($('stSpeech'), 'Generating…', 'busy');
   try{
-    const body = { sid: SID, engine, text: $('text').value };
-    if(engine === 'elevenlabs'){
-      Object.assign(body, {
-        voice_id: $('el_voice').value, model_id: $('el_model').value,
-        stability: $('el_stab').value, similarity_boost: $('el_sim').value,
-        style: $('el_style').value, speed: $('el_speed').value,
-        apply_text_normalization: $('el_norm').checked ? 'auto' : 'off',
-        api_key: $('el_key').value
-      });
-    } else {
-      Object.assign(body, {
-        azure_voice: $('az_voice').value, azure_locale: $('az_locale').value,
-        azure_style: $('az_style').value, azure_style_degree: $('az_deg').value,
-        azure_rate: $('az_rate').value, azure_key: $('az_key').value, azure_region: $('az_region').value
-      });
-    }
+    const body = Object.assign({ sid: SID, text: $('text').value }, genSettings());
     const j = await postJSON('/api/tts', body);
     $('auSpeech').src = '/audio/'+j.file+bust(); $('auSpeech').style.display='block';
     setStatus($('stSpeech'), '✓ Speech ready · '+j.duration+'s', 'ok');
@@ -378,4 +427,115 @@ $('btnPreview').addEventListener('click', async () => {
   }catch(e){ setStatus($('stExport'), '✗ '+e.message, 'err'); }
 });
 $('mvol').addEventListener('input', () => { if(mixNodes && mixNodes.muGain) mixNodes.muGain.gain.value = parseFloat($('mvol').value)/100; });
+
+/* ---------------- Mode tabs (Single / Bulk) ---------------- */
+document.querySelectorAll('#modeTabs button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#modeTabs button').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  const bulk = b.dataset.mode === 'bulk';
+  $('singleText').style.display = bulk ? 'none' : 'block';
+  $('singleGen').style.display  = bulk ? 'none' : 'block';
+  $('singleExport').style.display = bulk ? 'none' : 'block';
+  $('bulkInput').style.display  = bulk ? 'block' : 'none';
+  $('bulkResultsCard').style.display = bulk ? 'block' : 'none';
+}));
+
+/* ---------------- Bulk: parse spreadsheet ---------------- */
+let bulkSheets = [], curSheet = null;
+function guessCol(cols, keys){
+  for(let i=0;i<cols.length;i++){ const h=(cols[i]||'').toLowerCase(); if(keys.some(k=>h.includes(k))) return i; }
+  return -1;
+}
+function fillColSelect(sel, cols, chosen){
+  sel.innerHTML = '';
+  cols.forEach((c,i) => { const o=document.createElement('option'); o.value=i; o.textContent = c || ('Column '+(i+1)); sel.appendChild(o); });
+  if(chosen>=0) sel.value = chosen;
+}
+function loadSheet(idx){
+  curSheet = bulkSheets[idx];
+  const cols = curSheet.columns;
+  fillColSelect($('colText'), cols, guessCol(cols, ['script','prompt','text','français','francais']));
+  fillColSelect($('colName'), cols, guessCol(cols, ['tag','name','file','title','prompt name']));
+  $('bulkCount').textContent = curSheet.rows.length + ' rows found in "' + curSheet.name + '".';
+}
+$('sheetFile').addEventListener('change', async (ev) => {
+  const file = ev.target.files[0]; if(!file) return;
+  setStatus($('stBulk'), 'Reading file…', 'busy');
+  try{
+    const fd = new FormData(); fd.append('file', file);
+    const r = await fetch('/api/parse-sheet', {method:'POST', body:fd});
+    const j = await r.json(); if(!r.ok) throw new Error(j.error||('HTTP '+r.status));
+    bulkSheets = (j.sheets||[]).filter(s => s.columns.length);
+    if(!bulkSheets.length) throw new Error('No columns found.');
+    if(bulkSheets.length > 1){
+      $('sheetSelWrap').style.display = 'block';
+      $('sheetSel').innerHTML = '';
+      bulkSheets.forEach((s,i)=>{ const o=document.createElement('option'); o.value=i; o.textContent=s.name; $('sheetSel').appendChild(o); });
+    } else { $('sheetSelWrap').style.display = 'none'; }
+    loadSheet(0);
+    $('bulkMap').style.display = 'block';
+    setStatus($('stBulk'), '✓ Loaded', 'ok');
+  }catch(e){ setStatus($('stBulk'), '✗ '+e.message, 'err'); }
+});
+$('sheetSel').addEventListener('change', () => loadSheet(parseInt($('sheetSel').value)));
+
+/* ---------------- Bulk: generate all ---------------- */
+function sanitizeName(s){ return (s||'').replace(/[<>:"/\\|?*\n\r]/g,'').replace(/\s+/g,'_'); }
+
+async function renderOne(text, base){
+  const body = Object.assign({ sid: SID, text, output_name: base }, genSettings(), exportSettings());
+  return await postJSON('/api/render', body);
+}
+
+function makeRow(i, filename, text){
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px;background:var(--card2)';
+  wrap.innerHTML =
+    '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center">'
+    + '<b style="color:var(--accent2)">'+filename+'</b><span class="status" id="bst_'+i+'"></span></div>'
+    + '<textarea id="btxt_'+i+'" style="margin-top:8px;min-height:60px"></textarea>'
+    + '<audio id="bau_'+i+'" controls style="display:none;width:100%;margin-top:8px"></audio>'
+    + '<div class="row-actions" style="margin-top:8px">'
+    + '<button class="btn secondary" id="brg_'+i+'">↻ Regenerate</button>'
+    + '<a class="dl" id="bdl_'+i+'" style="display:none">⬇ Download</a></div>';
+  $('bulkResults').appendChild(wrap);
+  $('btxt_'+i).value = text;
+  $('brg_'+i).addEventListener('click', () => regenRow(i, filename));
+}
+function setRowAudio(i, j){
+  const au = $('bau_'+i); au.src = '/audio/'+j.file+bust(); au.style.display='block';
+  const dl = $('bdl_'+i); dl.href = '/api/download/'+encodeURIComponent(j.file)+'?name='+encodeURIComponent(j.download_name);
+  dl.setAttribute('download', j.download_name); dl.style.display='inline';
+}
+async function regenRow(i, filename){
+  const base = filename.replace(/\.wav$/i,'');
+  setStatus($('bst_'+i), 'Regenerating…', 'busy');
+  try{ const j = await renderOne($('btxt_'+i).value, base); setRowAudio(i, j); setStatus($('bst_'+i), '✓ '+j.duration+'s', 'ok'); }
+  catch(e){ setStatus($('bst_'+i), '✗ '+e.message, 'err'); }
+}
+
+$('btnBulk').addEventListener('click', async () => {
+  if(!curSheet){ setStatus($('stBulk'), 'Load a file first.', 'err'); return; }
+  const ti = parseInt($('colText').value), ni = parseInt($('colName').value);
+  const suffix = $('suffix').value || '';
+  const rows = curSheet.rows.filter(r => (r[ti]||'').trim());
+  if(!rows.length){ setStatus($('stBulk'), 'No non-empty text rows.', 'err'); return; }
+  $('bulkResults').innerHTML = ''; $('zipLink').style.display='none';
+  $('btnBulk').disabled = true;
+  let done = 0, ok = 0;
+  for(let k=0;k<rows.length;k++){
+    const text = rows[k][ti];
+    let nm = sanitizeName((rows[k][ni]||'').trim()) || ('row'+(k+1));
+    const filename = nm + suffix + '.wav';
+    makeRow(k, filename, text);
+    setStatus($('stBulk'), 'Generating '+(k+1)+' / '+rows.length+'…', 'busy');
+    setStatus($('bst_'+k), 'Generating…', 'busy');
+    try{ const j = await renderOne(text, nm + suffix); setRowAudio(k, j); setStatus($('bst_'+k), '✓ '+j.duration+'s', 'ok'); ok++; }
+    catch(e){ setStatus($('bst_'+k), '✗ '+e.message, 'err'); }
+    done++;
+  }
+  $('btnBulk').disabled = false;
+  setStatus($('stBulk'), '✓ Done — '+ok+' / '+done+' generated', ok===done?'ok':'err');
+  if(ok>0){ $('zipLink').href = '/api/bulk-zip?sid='+encodeURIComponent(SID); $('zipLink').style.display='inline'; }
+});
 </script>

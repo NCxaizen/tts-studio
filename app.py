@@ -269,28 +269,24 @@ FORMATS = {
 }
 
 
-@app.route("/api/export", methods=["POST"])
-def api_export():
-    d = request.get_json(force=True)
-    sid = clean_sid(d.get("sid"))
-    sp_path = os.path.join(GEN_DIR, f"{sid}_speech.wav")
-    if not os.path.exists(sp_path):
-        return jsonify(error="Generate speech first."), 400
+def synth(d, sid):
+    """Dispatch to the chosen TTS engine -> (float samples @44100 mono, error)."""
+    engine = (d.get("engine") or "elevenlabs").lower()
+    return tts_azure(d, sid) if engine == "azure" else tts_elevenlabs(d, sid)
 
-    use_music = bool(d.get("use_music"))
-    music_vol = float(d.get("music_volume", 15)) / 100.0
-    fmt = d.get("format", "pcm_8000")
+
+def mix_and_encode(sid, speech, use_music, music_vol, fmt, out_base):
+    """Mix optional music bed under speech and encode to the target format.
+    Returns (out_name, download_name, duration, error)."""
     if fmt not in FORMATS:
-        return jsonify(error=f"Unknown format {fmt}."), 400
-    out_base = safe_name(d.get("output_name") or "output")
+        return None, None, None, f"Unknown format {fmt}."
+    out_base = safe_name(out_base)
     if out_base.lower().endswith(".wav"):
         out_base = out_base[:-4]
     out_name = f"{sid}__{out_base}.wav"
 
-    speech = read_wav_int16(sp_path)
     N = len(speech)
     mix = speech.copy()
-
     music_path = os.path.join(GEN_DIR, f"{sid}_music.wav")
     if use_music and os.path.exists(music_path):
         music = read_wav_int16(music_path)
@@ -311,10 +307,95 @@ def api_export():
     cmd = [FFMPEG, "-y", "-i", tmp] + FORMATS[fmt] + ["-fflags", "+bitexact", out_path]
     p = subprocess.run(cmd, capture_output=True, text=True)
     if p.returncode != 0:
-        return jsonify(error=f"ffmpeg failed: {p.stderr[-300:]}"), 500
-    # duration from the PCM mix (wave can't read A-law/mu-law output)
-    return jsonify(file=out_name, download_name=f"{out_base}.wav",
-                   duration=round(N / float(SAMPLE_RATE), 2), format=fmt)
+        return None, None, None, f"ffmpeg failed: {p.stderr[-300:]}"
+    return out_name, f"{out_base}.wav", round(N / float(SAMPLE_RATE), 2), None
+
+
+@app.route("/api/export", methods=["POST"])
+def api_export():
+    d = request.get_json(force=True)
+    sid = clean_sid(d.get("sid"))
+    sp_path = os.path.join(GEN_DIR, f"{sid}_speech.wav")
+    if not os.path.exists(sp_path):
+        return jsonify(error="Generate speech first."), 400
+    speech = read_wav_int16(sp_path)
+    out_name, dl, dur, err = mix_and_encode(
+        sid, speech, bool(d.get("use_music")),
+        float(d.get("music_volume", 15)) / 100.0,
+        d.get("format", "pcm_8000"), d.get("output_name") or "output")
+    if err:
+        return jsonify(error=err), 500
+    return jsonify(file=out_name, download_name=dl, duration=dur, format=d.get("format", "pcm_8000"))
+
+
+@app.route("/api/render", methods=["POST"])
+def api_render():
+    """Generate speech for arbitrary text + settings and export in one call.
+    Used by the Bulk tab and per-row regeneration."""
+    d = request.get_json(force=True)
+    sid = clean_sid(d.get("sid"))
+    samples, err = synth(d, sid)
+    if err:
+        return jsonify(error=err), 502
+    out_name, dl, dur, err = mix_and_encode(
+        sid, samples, bool(d.get("use_music")),
+        float(d.get("music_volume", 15)) / 100.0,
+        d.get("format", "pcm_8000"), d.get("output_name") or "output")
+    if err:
+        return jsonify(error=err), 500
+    return jsonify(file=out_name, download_name=dl, duration=dur, format=d.get("format", "pcm_8000"))
+
+
+@app.route("/api/parse-sheet", methods=["POST"])
+def parse_sheet():
+    if "file" not in request.files:
+        return jsonify(error="No file uploaded."), 400
+    f = request.files["file"]
+    fname = (f.filename or "").lower()
+    data = f.read()
+    MAX_ROWS = 2000
+    sheets = []
+    try:
+        if fname.endswith(".csv"):
+            import csv, io as _io
+            txt = data.decode("utf-8-sig", errors="replace")
+            reader = list(csv.reader(_io.StringIO(txt)))
+            reader = [r for r in reader if any((c or "").strip() for c in r)]
+            headers = [str(c) for c in reader[0]] if reader else []
+            rows = [[("" if c is None else str(c)) for c in r] for r in reader[1:MAX_ROWS + 1]]
+            sheets.append({"name": "CSV", "columns": headers, "rows": rows})
+        else:
+            import openpyxl, io as _io
+            wb = openpyxl.load_workbook(_io.BytesIO(data), read_only=True, data_only=True)
+            for sname in wb.sheetnames:
+                ws = wb[sname]
+                allrows = list(ws.iter_rows(values_only=True))
+                if not allrows:
+                    sheets.append({"name": sname, "columns": [], "rows": []}); continue
+                headers = [("" if c is None else str(c)) for c in allrows[0]]
+                rows = [[("" if c is None else str(c)) for c in r] for r in allrows[1:MAX_ROWS + 1]]
+                sheets.append({"name": sname, "columns": headers, "rows": rows})
+    except Exception as e:
+        return jsonify(error=f"Could not read sheet: {e}"), 400
+    return jsonify(sheets=sheets)
+
+
+@app.route("/api/bulk-zip")
+def bulk_zip():
+    sid = clean_sid(request.args.get("sid"))
+    import zipfile, io as _io
+    prefix = f"{sid}__"
+    buf = _io.BytesIO()
+    count = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for fn in sorted(os.listdir(GEN_DIR)):
+            if fn.startswith(prefix) and fn.endswith(".wav"):
+                z.write(os.path.join(GEN_DIR, fn), arcname=fn[len(prefix):])
+                count += 1
+    if count == 0:
+        return jsonify(error="No generated files yet."), 400
+    buf.seek(0)
+    return send_file(buf, mimetype="application/zip", as_attachment=True, download_name="tts_bulk.zip")
 
 
 @app.route("/api/download/<path:fname>")
