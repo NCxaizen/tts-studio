@@ -221,9 +221,9 @@ def use_default_music():
     if not os.path.exists(src):
         return jsonify(error="Default music not found on server."), 404
     samples = resample_mono_44100(src)
-    fname = f"{sid}_music.wav"
-    write_wav_int16(os.path.join(GEN_DIR, fname), samples)
-    return jsonify(file=fname, duration=round(len(samples) / SAMPLE_RATE, 2))
+    write_wav_int16(os.path.join(GEN_DIR, f"{sid}_music_orig.wav"), samples)
+    write_wav_int16(os.path.join(GEN_DIR, f"{sid}_music.wav"), samples)
+    return jsonify(file=f"{sid}_music_orig.wav", duration=round(len(samples) / SAMPLE_RATE, 2))
 
 
 @app.route("/api/upload-music", methods=["POST"])
@@ -237,9 +237,27 @@ def upload_music():
         samples = resample_mono_44100(tmp)
     except Exception as e:
         return jsonify(error=f"Could not read audio (WAV only): {e}"), 400
-    fname = f"{sid}_music.wav"
-    write_wav_int16(os.path.join(GEN_DIR, fname), samples)
-    return jsonify(file=fname, duration=round(len(samples) / SAMPLE_RATE, 2))
+    write_wav_int16(os.path.join(GEN_DIR, f"{sid}_music_orig.wav"), samples)
+    write_wav_int16(os.path.join(GEN_DIR, f"{sid}_music.wav"), samples)
+    return jsonify(file=f"{sid}_music_orig.wav", duration=round(len(samples) / SAMPLE_RATE, 2))
+
+
+@app.route("/api/trim-music", methods=["POST"])
+def trim_music():
+    d = request.get_json(force=True)
+    sid = clean_sid(d.get("sid"))
+    orig = os.path.join(GEN_DIR, f"{sid}_music_orig.wav")
+    if not os.path.exists(orig):
+        return jsonify(error="Load or upload music first."), 400
+    samples = read_wav_int16(orig)
+    total = len(samples) / float(SAMPLE_RATE)
+    start = max(0.0, min(float(d.get("start", 0)), total))
+    end = max(start, min(float(d.get("end", total)), total))
+    a, b = int(round(start * SAMPLE_RATE)), int(round(end * SAMPLE_RATE))
+    if b - a < int(0.05 * SAMPLE_RATE):
+        return jsonify(error="Selection is too short."), 400
+    write_wav_int16(os.path.join(GEN_DIR, f"{sid}_music.wav"), samples[a:b])
+    return jsonify(file=f"{sid}_music.wav", duration=round((b - a) / float(SAMPLE_RATE), 2))
 
 
 FORMATS = {

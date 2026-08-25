@@ -134,6 +134,24 @@
     <input type="range" id="mvol" min="0" max="100" step="1" value="15"/>
   </div>
   <audio id="auMusic" controls style="display:none"></audio>
+
+  <div id="trimBox" style="display:none">
+    <hr/>
+    <label style="margin-top:0">Trim the music — pick the part to keep</label>
+    <div class="muted" style="margin-bottom:12px">Drag the handles, preview the selection, then apply.</div>
+    <div class="slider-row"><div class="top"><span>Start</span><span class="val" id="tStart">0.00 s</span></div>
+      <input type="range" id="trimStart" min="0" max="100" step="0.01" value="0"/></div>
+    <div class="slider-row"><div class="top"><span>End</span><span class="val" id="tEnd">0.00 s</span></div>
+      <input type="range" id="trimEnd" min="0" max="100" step="0.01" value="100"/></div>
+    <div class="muted">Selected length: <b id="tLen" style="color:var(--accent2)">0.00 s</b></div>
+    <div class="row-actions">
+      <button class="btn secondary" id="btnPlaySel">▶ Play selection</button>
+      <button class="btn secondary" id="btnStopSel">■ Stop</button>
+      <button class="btn" id="btnApplyTrim">✓ Apply trim</button>
+      <button class="btn secondary" id="btnResetTrim">↺ Reset to full</button>
+      <span class="status" id="stTrim"></span>
+    </div>
+  </div>
 </div>
 
 <!-- STEP 3: EXPORT -->
@@ -152,6 +170,8 @@
     <div><label>Output filename</label><input type="text" id="out_name" value="output_F.wav"/></div>
   </div>
   <div class="row-actions">
+    <button class="btn secondary" id="btnPreview" disabled>▶ Preview mix (listen)</button>
+    <button class="btn secondary" id="btnStopPreview">■ Stop</button>
     <button class="btn" id="btnExport" disabled>Generate &amp; Export</button>
     <span class="status" id="stExport"></span>
     <a class="dl" id="dlLink" href="#" style="display:none" download>⬇ Download</a>
@@ -217,7 +237,7 @@ $('btnSpeech').addEventListener('click', async () => {
     const j = await postJSON('/api/tts', body);
     $('auSpeech').src = '/audio/'+j.file+bust(); $('auSpeech').style.display='block';
     setStatus($('stSpeech'), '✓ Speech ready · '+j.duration+'s', 'ok');
-    speechReady = true; $('btnExport').disabled = false;
+    speechReady = true; $('btnExport').disabled = false; $('btnPreview').disabled = false;
   }catch(e){ setStatus($('stSpeech'), '✗ '+e.message, 'err'); }
   btn.disabled = false;
 });
@@ -230,10 +250,11 @@ document.querySelectorAll('input[name=msrc]').forEach(r => r.addEventListener('c
   else if(v === 'default'){
     setStatus($('stMusic'), 'Loading track…', 'busy');
     try{ const j = await postJSON('/api/use-default-music', {sid: SID});
-      $('auMusic').src = '/audio/'+j.file+bust(); $('auMusic').style.display='block';
-      setStatus($('stMusic'), '✓ Provided track loaded · '+j.duration+'s', 'ok');
+      onMusicReady(j, 'Provided track loaded');
     }catch(e){ setStatus($('stMusic'), '✗ '+e.message, 'err'); }
-  } else { setStatus($('stMusic'), '', ''); }
+  } else {
+    setStatus($('stMusic'), '', ''); $('trimBox').style.display='none'; musicReady=false; stopSelection();
+  }
 }));
 
 $('musicFile').addEventListener('change', async (ev) => {
@@ -244,8 +265,7 @@ $('musicFile').addEventListener('change', async (ev) => {
     const fd = new FormData(); fd.append('file', file); fd.append('sid', SID);
     const r = await fetch('/api/upload-music', {method:'POST', body:fd});
     const j = await r.json(); if(!r.ok) throw new Error(j.error||('HTTP '+r.status));
-    $('auMusic').src = '/audio/'+j.file+bust(); $('auMusic').style.display='block';
-    setStatus($('stMusic'), '✓ Uploaded · '+j.duration+'s', 'ok');
+    onMusicReady(j, 'Uploaded');
   }catch(e){ setStatus($('stMusic'), '✗ '+e.message, 'err'); }
   ev.target.value = '';
 });
@@ -265,8 +285,97 @@ $('btnExport').addEventListener('click', async () => {
     $('auOut').src = '/audio/'+j.file+bust(); $('auOut').style.display='block';
     $('dlLink').href = '/api/download/'+encodeURIComponent(j.file)+'?name='+encodeURIComponent(j.download_name);
     $('dlLink').setAttribute('download', j.download_name); $('dlLink').style.display='inline';
-    setStatus($('stExport'), '✓ Exported '+j.file+' · '+j.duration+'s · '+j.format, 'ok');
+    setStatus($('stExport'), '✓ Exported '+j.download_name+' · '+j.duration+'s · '+j.format, 'ok');
   }catch(e){ setStatus($('stExport'), '✗ '+e.message, 'err'); }
   btn.disabled = false;
 });
+
+/* ---------------- Music trimmer ---------------- */
+let musicReady = false, musicDur = 0, musicOrigFile = '';
+function fmtSel(){
+  const s = parseFloat($('trimStart').value), e = parseFloat($('trimEnd').value);
+  $('tStart').textContent = s.toFixed(2)+' s';
+  $('tEnd').textContent = e.toFixed(2)+' s';
+  $('tLen').textContent = Math.max(0, e-s).toFixed(2)+' s';
+}
+function onMusicReady(j, label){
+  musicReady = true; musicDur = j.duration; musicOrigFile = j.file;
+  stopSelection();
+  $('auMusic').src = '/audio/'+j.file+bust(); $('auMusic').style.display='block';
+  $('trimStart').max = musicDur; $('trimEnd').max = musicDur;
+  $('trimStart').value = 0; $('trimEnd').value = musicDur; fmtSel();
+  $('trimBox').style.display = 'block';
+  setStatus($('stMusic'), '✓ '+label+' · '+musicDur+'s', 'ok');
+  setStatus($('stTrim'), '', '');
+}
+$('trimStart').addEventListener('input', () => {
+  if(parseFloat($('trimStart').value) > parseFloat($('trimEnd').value)-0.05)
+    $('trimStart').value = Math.max(0, parseFloat($('trimEnd').value)-0.05);
+  fmtSel();
+});
+$('trimEnd').addEventListener('input', () => {
+  if(parseFloat($('trimEnd').value) < parseFloat($('trimStart').value)+0.05)
+    $('trimEnd').value = Math.min(musicDur, parseFloat($('trimStart').value)+0.05);
+  fmtSel();
+});
+let selTimer = null;
+function stopSelection(){ const a = $('auMusic'); try{a.pause();}catch(e){} if(selTimer){clearInterval(selTimer);selTimer=null;} }
+$('btnPlaySel').addEventListener('click', () => {
+  const a = $('auMusic'); const s = parseFloat($('trimStart').value), e = parseFloat($('trimEnd').value);
+  stopSelection(); a.currentTime = s; a.play();
+  selTimer = setInterval(() => { if(a.currentTime >= e) stopSelection(); }, 30);
+});
+$('btnStopSel').addEventListener('click', stopSelection);
+$('btnApplyTrim').addEventListener('click', async () => {
+  stopSelection(); setStatus($('stTrim'), 'Trimming…', 'busy');
+  try{
+    const j = await postJSON('/api/trim-music', {sid: SID, start: $('trimStart').value, end: $('trimEnd').value});
+    setStatus($('stTrim'), '✓ Trimmed to '+j.duration+'s — use “Preview mix” to hear it.', 'ok');
+  }catch(e){ setStatus($('stTrim'), '✗ '+e.message, 'err'); }
+});
+$('btnResetTrim').addEventListener('click', async () => {
+  stopSelection(); $('trimStart').value = 0; $('trimEnd').value = musicDur; fmtSel();
+  try{ await postJSON('/api/trim-music', {sid: SID, start: 0, end: musicDur});
+    setStatus($('stTrim'), '✓ Reset to full length.', 'ok');
+  }catch(e){ setStatus($('stTrim'), '✗ '+e.message, 'err'); }
+});
+
+/* ---------------- Preview mix (Web Audio, speech + trimmed music) ---------------- */
+let actx = null, mixNodes = null;
+function stopPreviewMix(){
+  if(mixNodes){ try{ mixNodes.sp.pause(); if(mixNodes.mu) mixNodes.mu.pause(); }catch(e){} mixNodes = null; }
+  if(actx){ try{ actx.close(); }catch(e){} actx = null; }
+}
+$('btnStopPreview').addEventListener('click', stopPreviewMix);
+$('btnPreview').addEventListener('click', async () => {
+  stopPreviewMix();
+  const withMusic = document.querySelector('input[name=msrc]:checked').value !== 'none';
+  setStatus($('stExport'), 'Loading preview…', 'busy');
+  try{
+    actx = new (window.AudioContext || window.webkitAudioContext)();
+    const sp = new Audio('/audio/'+SID+'_speech.wav'+bust());
+    const waiters = [new Promise(r => sp.addEventListener('canplaythrough', r, {once:true}))];
+    let mu = null;
+    if(withMusic){
+      mu = new Audio('/audio/'+SID+'_music.wav'+bust()); mu.loop = true;
+      waiters.push(new Promise(r => mu.addEventListener('canplaythrough', r, {once:true})));
+    }
+    await Promise.all(waiters);
+    const spSrc = actx.createMediaElementSource(sp);
+    const spGain = actx.createGain(); spGain.gain.value = 1.0;
+    spSrc.connect(spGain).connect(actx.destination);
+    let muGain = null;
+    if(mu){
+      const muSrc = actx.createMediaElementSource(mu);
+      muGain = actx.createGain(); muGain.gain.value = parseFloat($('mvol').value)/100;
+      muSrc.connect(muGain).connect(actx.destination);
+      mu.play();
+    }
+    mixNodes = {sp, mu, spGain, muGain};
+    sp.play();
+    sp.addEventListener('ended', () => { stopPreviewMix(); setStatus($('stExport'), '✓ Preview finished', 'ok'); }, {once:true});
+    setStatus($('stExport'), '▶ Previewing… move the music-volume slider to adjust live.', 'busy');
+  }catch(e){ setStatus($('stExport'), '✗ '+e.message, 'err'); }
+});
+$('mvol').addEventListener('input', () => { if(mixNodes && mixNodes.muGain) mixNodes.muGain.gain.value = parseFloat($('mvol').value)/100; });
 </script>
