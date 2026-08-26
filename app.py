@@ -391,22 +391,58 @@ def parse_sheet():
     return jsonify(sheets=sheets)
 
 
-@app.route("/api/bulk-zip")
+# MakeZip "special" package: standard zip + a meta.xlsx manifest (matches the
+# BlackNGreen MakeZip Utility Tool output — Sheet1, dd-MM-yyyy dates, these columns).
+META_HEADER = ["Path", "Type", "ExpireDate", "ContentProvider", "CategoryName",
+               "LabelName", "Language", "SongCode", "SongName", "CountryName",
+               "OperatorName", "DownloadUrl", "CrbtUrl", "BillingUrl", "Options"]
+
+
+@app.route("/api/bulk-zip", methods=["POST"])
 def bulk_zip():
-    sid = clean_sid(request.args.get("sid"))
     import zipfile, io as _io
+    from openpyxl import Workbook
+    d = request.get_json(force=True)
+    sid = clean_sid(d.get("sid"))
+    folder = safe_name(d.get("folder") or "prompts")
+    m = d.get("meta") or {}
+    plain = bool(d.get("plain"))  # plain=true -> just the wavs, no meta.xlsx/folder
+
     prefix = f"{sid}__"
-    buf = _io.BytesIO()
-    count = 0
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for fn in sorted(os.listdir(GEN_DIR)):
-            if fn.startswith(prefix) and fn.endswith(".wav"):
-                z.write(os.path.join(GEN_DIR, fn), arcname=fn[len(prefix):])
-                count += 1
-    if count == 0:
+    files = sorted(f for f in os.listdir(GEN_DIR) if f.startswith(prefix) and f.endswith(".wav"))
+    if not files:
         return jsonify(error="No generated files yet."), 400
-    buf.seek(0)
-    return send_file(buf, mimetype="application/zip", as_attachment=True, download_name="tts_bulk.zip")
+
+    def g(k, default=""):
+        v = m.get(k)
+        return default if v is None or v == "" else v
+
+    zbuf = _io.BytesIO()
+    with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as z:
+        if plain:
+            for f in files:
+                z.write(os.path.join(GEN_DIR, f), arcname=f[len(prefix):])
+            dlname = "tts_bulk.zip"
+        else:
+            wb = Workbook(); ws = wb.active; ws.title = "Sheet1"
+            ws.append(META_HEADER)
+            for f in files:
+                dl = f[len(prefix):]
+                arc = f"{folder}/{dl}"
+                z.write(os.path.join(GEN_DIR, f), arcname=arc)
+                ext = os.path.splitext(dl)[1] or ""
+                ws.append([arc, ext, g("expire_date", "26-08-2100"), g("content_provider"),
+                           g("category_name"), g("label_name"), g("language"),
+                           g("song_code"), g("song_name"), g("country_name"),
+                           g("operator_name"), g("download_url", "http://"),
+                           g("crbt_url", "http://"), g("billing_url", "http://"),
+                           g("options", "Default")])
+            mbuf = _io.BytesIO(); wb.save(mbuf); mbuf.seek(0)
+            z.writestr("meta.xlsx", mbuf.read())
+            dlname = folder + ".zip"
+
+    zbuf.seek(0)
+    return send_file(zbuf, mimetype="application/zip", as_attachment=True, download_name=dlname)
 
 
 @app.route("/api/download/<path:fname>")
