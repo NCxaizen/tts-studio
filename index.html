@@ -172,6 +172,7 @@
         <div><label>Text column</label><select id="colText"></select></div>
         <div><label>Filename column</label><select id="colName"></select></div>
         <div><label>Filename suffix</label><input type="text" id="suffix" value="_F" placeholder="e.g. _F"/></div>
+        <div><label>Package folder name</label><input type="text" id="pkgFolder" value="prompts"/></div>
       </div>
       <div class="muted" id="bulkCount" style="margin-top:6px"></div>
       <div class="row-actions">
@@ -181,37 +182,7 @@
         <a class="dl" id="zipLink" href="#" style="display:none">⬇ Download all (ZIP)</a>
         <span class="status" id="stBulk"></span>
       </div>
-      <div class="muted" style="margin-top:4px">Uses the engine, voice &amp; parameters above, plus the music and format settings below.</div>
-
-      <details id="pkgPanel" style="margin-top:18px">
-        <summary style="cursor:pointer;font-weight:590;font-size:14px">📦 MakeZip package settings (meta.xlsx)</summary>
-        <div class="muted" style="margin:8px 0 4px">The bulk download is a MakeZip-style package: your audio inside a folder, plus a <b>meta.xlsx</b> manifest.</div>
-        <div class="row">
-          <div><label>Folder name</label><input type="text" id="pkgFolder" value="prompts"/></div>
-          <div><label>Expire date</label><input type="text" id="pkgExpire" value="26-08-2100" placeholder="dd-MM-yyyy"/></div>
-          <div><label>Options</label><select id="pkgOptions"><option>Default</option></select></div>
-        </div>
-        <div class="row">
-          <div><label>Content Provider</label><input type="text" id="pkgCP" value=""/></div>
-          <div><label>Category Name</label><input type="text" id="pkgCat" value=""/></div>
-          <div><label>Label Name</label><input type="text" id="pkgLabel" value=""/></div>
-        </div>
-        <div class="row">
-          <div><label>Language</label><input type="text" id="pkgLang" value=""/></div>
-          <div><label>Song Code</label><input type="text" id="pkgSongCode" value=""/></div>
-          <div><label>Song Name</label><input type="text" id="pkgSongName" value=""/></div>
-        </div>
-        <div class="row">
-          <div><label>Country</label><select id="pkgCountry"><option>Afghanistan</option><option>Kenya</option><option>Nigeria</option><option>Tanzania</option></select></div>
-          <div><label>Operator</label><select id="pkgOperator"><option>Airtel</option><option>MTN</option><option>MTNL</option><option>Starcomms</option><option>Vodafone</option></select></div>
-        </div>
-        <div class="row">
-          <div><label>Download URL</label><input type="text" id="pkgDl" value="http://"/></div>
-          <div><label>CRBT URL</label><input type="text" id="pkgCrbt" value="http://"/></div>
-          <div><label>Billing URL</label><input type="text" id="pkgBilling" value="http://"/></div>
-        </div>
-        <label style="display:flex;align-items:center;gap:8px;font-weight:400"><input type="checkbox" id="pkgPlain"/> Plain zip instead (just the .wav files, no meta.xlsx)</label>
-      </details>
+      <div class="muted" style="margin-top:4px">Uses the engine, voice &amp; parameters above, plus the music and format settings below. Download is a MakeZip package (audio folder + <b>meta.xlsx</b>).</div>
     </div>
   </div>
 </div>
@@ -626,26 +597,17 @@ $('btnBulk').addEventListener('click', async () => {
 
 /* ---------------- Bulk download: MakeZip package (zip + meta.xlsx) ---------------- */
 async function downloadPackage(){
-  const meta = {
-    expire_date: $('pkgExpire').value, content_provider: $('pkgCP').value,
-    category_name: $('pkgCat').value, label_name: $('pkgLabel').value, language: $('pkgLang').value,
-    song_code: $('pkgSongCode').value, song_name: $('pkgSongName').value,
-    country_name: $('pkgCountry').value, operator_name: $('pkgOperator').value,
-    download_url: $('pkgDl').value, crbt_url: $('pkgCrbt').value, billing_url: $('pkgBilling').value,
-    options: $('pkgOptions').value
-  };
   const folder = ($('pkgFolder').value || 'prompts');
-  const plain = $('pkgPlain').checked;
-  setStatus($('stBulk'), 'Building '+(plain?'zip':'MakeZip package')+'…', 'busy');
+  setStatus($('stBulk'), 'Building MakeZip package…', 'busy');
   try{
     const r = await fetch('/api/bulk-zip', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ sid: SID, folder, meta, plain })});
+      body: JSON.stringify({ sid: SID, folder })});   // meta values are fixed server-side
     if(!r.ok){ let m='HTTP '+r.status; try{ m=(await r.json()).error||m; }catch(e){} throw new Error(m); }
     const blob = await r.blob();
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = (plain?'tts_bulk':folder)+'.zip';
+    const a = document.createElement('a'); a.href = url; a.download = folder+'.zip';
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-    setStatus($('stBulk'), '✓ Downloaded '+(plain?'tts_bulk.zip':folder+'.zip'), 'ok');
+    setStatus($('stBulk'), '✓ Downloaded '+folder+'.zip', 'ok');
   }catch(e){ setStatus($('stBulk'), '✗ '+e.message, 'err'); }
 }
 $('zipLink').addEventListener('click', e => { e.preventDefault(); downloadPackage(); });

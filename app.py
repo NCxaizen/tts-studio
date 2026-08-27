@@ -397,6 +397,24 @@ META_HEADER = ["Path", "Type", "ExpireDate", "ContentProvider", "CategoryName",
                "LabelName", "Language", "SongCode", "SongName", "CountryName",
                "OperatorName", "DownloadUrl", "CrbtUrl", "BillingUrl", "Options"]
 
+# Fixed META INFO — matches the MakeZip tool's defaults exactly (see screenshot).
+# These are intentionally NOT exposed in the UI; every meta.xlsx row uses them.
+META_EXPIRE       = "26-08-2100"   # Aug 26, 2100 in dd-MM-yyyy
+META_CONTENT_PROV = "a"
+META_CATEGORY     = "b"
+META_LABEL        = "c"
+META_LANGUAGE     = "d"
+META_SONG_CODE    = "e"
+META_SONG_NAME    = "f"
+# NOTE: the tool writes Operator into the CountryName column and Country into the
+# OperatorName column (GUI: Operator=Airtel, Country=Afghanistan). Kept as-is to match output.
+META_COUNTRY_COL  = "Airtel"
+META_OPERATOR_COL = "Afghanistan"
+META_DOWNLOAD_URL = "http://"
+META_CRBT_URL     = "http://"
+META_BILLING_URL  = "http://"
+META_OPTIONS      = "Default"
+
 
 @app.route("/api/bulk-zip", methods=["POST"])
 def bulk_zip():
@@ -405,44 +423,30 @@ def bulk_zip():
     d = request.get_json(force=True)
     sid = clean_sid(d.get("sid"))
     folder = safe_name(d.get("folder") or "prompts")
-    m = d.get("meta") or {}
-    plain = bool(d.get("plain"))  # plain=true -> just the wavs, no meta.xlsx/folder
 
     prefix = f"{sid}__"
     files = sorted(f for f in os.listdir(GEN_DIR) if f.startswith(prefix) and f.endswith(".wav"))
     if not files:
         return jsonify(error="No generated files yet."), 400
 
-    def g(k, default=""):
-        v = m.get(k)
-        return default if v is None or v == "" else v
-
     zbuf = _io.BytesIO()
     with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as z:
-        if plain:
-            for f in files:
-                z.write(os.path.join(GEN_DIR, f), arcname=f[len(prefix):])
-            dlname = "tts_bulk.zip"
-        else:
-            wb = Workbook(); ws = wb.active; ws.title = "Sheet1"
-            ws.append(META_HEADER)
-            for f in files:
-                dl = f[len(prefix):]
-                arc = f"{folder}/{dl}"
-                z.write(os.path.join(GEN_DIR, f), arcname=arc)
-                ext = os.path.splitext(dl)[1] or ""
-                ws.append([arc, ext, g("expire_date", "26-08-2100"), g("content_provider"),
-                           g("category_name"), g("label_name"), g("language"),
-                           g("song_code"), g("song_name"), g("country_name"),
-                           g("operator_name"), g("download_url", "http://"),
-                           g("crbt_url", "http://"), g("billing_url", "http://"),
-                           g("options", "Default")])
-            mbuf = _io.BytesIO(); wb.save(mbuf); mbuf.seek(0)
-            z.writestr("meta.xlsx", mbuf.read())
-            dlname = folder + ".zip"
+        wb = Workbook(); ws = wb.active; ws.title = "Sheet1"
+        ws.append(META_HEADER)
+        for f in files:
+            dl = f[len(prefix):]
+            arc = f"{folder}/{dl}"
+            z.write(os.path.join(GEN_DIR, f), arcname=arc)
+            ext = os.path.splitext(dl)[1] or ""
+            ws.append([arc, ext, META_EXPIRE, META_CONTENT_PROV, META_CATEGORY, META_LABEL,
+                       META_LANGUAGE, META_SONG_CODE, META_SONG_NAME, META_COUNTRY_COL,
+                       META_OPERATOR_COL, META_DOWNLOAD_URL, META_CRBT_URL, META_BILLING_URL,
+                       META_OPTIONS])
+        mbuf = _io.BytesIO(); wb.save(mbuf); mbuf.seek(0)
+        z.writestr("meta.xlsx", mbuf.read())
 
     zbuf.seek(0)
-    return send_file(zbuf, mimetype="application/zip", as_attachment=True, download_name=dlname)
+    return send_file(zbuf, mimetype="application/zip", as_attachment=True, download_name=folder + ".zip")
 
 
 @app.route("/api/download/<path:fname>")
