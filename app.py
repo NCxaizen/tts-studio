@@ -198,6 +198,11 @@ def index():
     return send_file(os.path.join(BASE_DIR, "index.html"))
 
 
+@app.route("/guide")
+def guide():
+    return send_file(os.path.join(BASE_DIR, "USER_GUIDE.html"))
+
+
 @app.route("/health")
 def health():
     return jsonify(ok=True, ffmpeg=FFMPEG)

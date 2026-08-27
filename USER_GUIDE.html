@@ -1,0 +1,237 @@
+<meta charset="utf-8"/>
+<title>TTS Studio Guide</title>
+<style>
+  :root{
+    --bg:#ffffff; --panel:#f5f5f7; --card:#ffffff;
+    --text:#1d1d1f; --muted:#6e6e73; --faint:#86868b;
+    --line:#d2d2d7; --accent:#0071e3; --accent-soft:rgba(0,113,227,.12);
+    --num:#e8e8ed;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#000000; --panel:#101012; --card:#1c1c1e;
+      --text:#f5f5f7; --muted:#a1a1a6; --faint:#86868b;
+      --line:#38383a; --accent:#2997ff; --accent-soft:rgba(41,151,255,.16);
+      --num:#2a2a2c;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#000000; --panel:#101012; --card:#1c1c1e;
+    --text:#f5f5f7; --muted:#a1a1a6; --faint:#86868b;
+    --line:#38383a; --accent:#2997ff; --accent-soft:rgba(41,151,255,.16);
+    --num:#2a2a2c;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue",Helvetica,Arial,sans-serif;
+    font-size:17px;line-height:1.6;letter-spacing:-.01em}
+  .container{max-width:720px;margin:0 auto;padding:0 24px}
+  section{padding:76px 0;border-bottom:1px solid var(--line)}
+  section.panel{background:var(--panel);border-bottom:none}
+  .eyebrow{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.09em;color:var(--accent);margin:0 0 14px}
+  h1{font-size:clamp(40px,7vw,60px);line-height:1.05;font-weight:600;letter-spacing:-.03em;margin:0;text-wrap:balance}
+  h2{font-size:clamp(28px,4.5vw,38px);line-height:1.1;font-weight:600;letter-spacing:-.02em;margin:0 0 10px;text-wrap:balance}
+  h3{font-size:21px;font-weight:600;letter-spacing:-.01em;margin:0 0 4px}
+  p{margin:0 0 18px;color:var(--text)}
+  .lead{font-size:clamp(19px,2.6vw,23px);line-height:1.45;color:var(--muted);font-weight:400}
+  .muted{color:var(--muted)}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+
+  /* Hero */
+  header.hero{text-align:center;padding:120px 0 78px;background:var(--panel)}
+  header.hero .lead{max-width:560px;margin:22px auto 0}
+  .badge{display:inline-block;margin:0 0 26px;padding:6px 15px;border-radius:980px;background:var(--card);
+    border:1px solid var(--line);font-size:13px;font-weight:590;color:var(--muted);letter-spacing:0}
+
+  /* Inline references to on-screen controls */
+  .ui{display:inline-block;padding:2px 10px;border-radius:7px;background:var(--accent);color:#fff;
+    font-size:.82em;font-weight:590;letter-spacing:0;white-space:nowrap;vertical-align:baseline}
+  .ui.soft{background:var(--accent-soft);color:var(--accent)}
+  .ui.tab{background:var(--card);border:1px solid var(--line);color:var(--text)}
+
+  /* Numbered steps */
+  ol.steps{list-style:none;counter-reset:s;margin:34px 0 0;padding:0;display:flex;flex-direction:column;gap:30px}
+  ol.steps li{counter-increment:s;display:grid;grid-template-columns:52px 1fr;gap:20px;align-items:start}
+  ol.steps li::before{content:counter(s);grid-row:1/span 2;
+    font-size:20px;font-weight:600;color:var(--accent);
+    width:44px;height:44px;border-radius:50%;background:var(--accent-soft);
+    display:flex;align-items:center;justify-content:center;font-variant-numeric:tabular-nums}
+  ol.steps h3{margin-top:6px}
+  ol.steps p{margin:0}
+
+  /* Two-up cards */
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:34px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:28px}
+  .card h3{font-size:22px;margin-bottom:8px}
+  .card p{margin:0;color:var(--muted);font-size:16px}
+  .card .tag{display:inline-block;margin-bottom:16px;font-size:13px;font-weight:600;color:var(--accent);
+    text-transform:uppercase;letter-spacing:.07em}
+  @media (max-width:640px){ .grid2{grid-template-columns:1fr} ol.steps li{grid-template-columns:42px 1fr;gap:15px} ol.steps li::before{width:38px;height:38px;font-size:17px} }
+
+  /* Format table */
+  .table{margin-top:30px;border:1px solid var(--line);border-radius:16px;overflow:hidden}
+  .table .trow{display:grid;grid-template-columns:1.4fr 1fr;gap:16px;padding:15px 20px;border-bottom:1px solid var(--line)}
+  .table .trow:last-child{border-bottom:none}
+  .table .trow.head{background:var(--panel);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+  .table .trow b{font-weight:590}
+  .table .trow span{color:var(--muted);font-size:15px}
+
+  /* Callout */
+  .note{margin-top:30px;padding:20px 24px;border-radius:16px;background:var(--accent-soft);
+    border:1px solid transparent;font-size:16px}
+  .note b{font-weight:600}
+
+  .tips{margin:30px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:16px}
+  .tips li{padding-left:26px;position:relative;color:var(--muted)}
+  .tips li::before{content:"";position:absolute;left:0;top:9px;width:8px;height:8px;border-radius:50%;background:var(--accent)}
+  .tips b{color:var(--text);font-weight:590}
+
+  footer{padding:54px 0 70px;text-align:center;color:var(--faint);font-size:13px}
+  footer .container{display:flex;flex-direction:column;gap:6px}
+</style>
+
+<header class="hero">
+  <div class="container">
+    <span class="badge">User Guide</span>
+    <h1>TTS Studio</h1>
+    <p class="lead">Turn text into ready-to-ship voice prompts — one at a time, or a whole spreadsheet at once.</p>
+  </div>
+</header>
+
+<section>
+  <div class="container">
+    <p class="eyebrow">Overview</p>
+    <h2>Two ways to work</h2>
+    <p class="lead" style="margin-bottom:0">Everything happens in your browser. Choose the mode that fits the job, set your voice once, and export.</p>
+    <div class="grid2">
+      <div class="card">
+        <span class="tag">Single</span>
+        <h3>One clip</h3>
+        <p>Type a line, generate it, add music if you want, and download a single audio file.</p>
+      </div>
+      <div class="card">
+        <span class="tag">Bulk</span>
+        <h3>A whole sheet</h3>
+        <p>Upload an Excel or CSV and generate every row at once — each clip playable, editable, and packaged together.</p>
+      </div>
+    </div>
+    <p class="muted" style="margin-top:34px;margin-bottom:0">Switch anytime using the <span class="ui tab">Single</span> <span class="ui tab">Bulk</span> control at the top.</p>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="container">
+    <p class="eyebrow">Getting started</p>
+    <h2>Open the app</h2>
+    <p>Open your TTS Studio link in any modern browser. There's nothing to install. The page loads with <b>Single</b> mode ready to go.</p>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <p class="eyebrow">Single mode</p>
+    <h2>Make one clip</h2>
+    <ol class="steps">
+      <li>
+        <h3>Choose a voice engine</h3>
+        <p>Select <span class="ui tab">ElevenLabs</span> or <span class="ui tab">Azure</span> at the top of the Speech card.</p>
+      </li>
+      <li>
+        <h3>Enter your text</h3>
+        <p>Type or paste the words you want spoken into the text box.</p>
+      </li>
+      <li>
+        <h3>Set the voice</h3>
+        <p>For ElevenLabs, paste the Voice ID. For Azure, enter the voice name. Adjust the sliders — stability, speed, and the others — to taste.</p>
+      </li>
+      <li>
+        <h3>Generate and listen</h3>
+        <p>Press <span class="ui">Generate Speech</span>, then play the clip that appears to hear it.</p>
+      </li>
+      <li>
+        <h3>Add background music <span class="muted" style="font-weight:400">(optional)</span></h3>
+        <p>In the Background Music card, pick the provided track or upload your own, set the volume, and trim it to the part you want. Press <span class="ui soft">Play selection</span> to preview the trim.</p>
+      </li>
+      <li>
+        <h3>Preview the mix</h3>
+        <p>Press <span class="ui soft">Preview mix</span> to hear the voice and music together before you commit — nudge the volume live until it sounds right.</p>
+      </li>
+      <li>
+        <h3>Choose a format and export</h3>
+        <p>Pick an output format, name the file, then press <span class="ui">Generate &amp; Export</span> and <span class="ui soft">Download</span>.</p>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="container">
+    <p class="eyebrow">Bulk mode</p>
+    <h2>Make many at once</h2>
+    <ol class="steps">
+      <li>
+        <h3>Switch to Bulk</h3>
+        <p>Select <span class="ui tab">Bulk</span> at the top. Your voice, music, and format settings carry over.</p>
+      </li>
+      <li>
+        <h3>Upload your spreadsheet</h3>
+        <p>Choose an <b>.xlsx</b> or <b>.csv</b> file. The app reads it and shows your columns.</p>
+      </li>
+      <li>
+        <h3>Map the columns</h3>
+        <p>Pick the <b>Text column</b> (what gets spoken) and the <b>Filename column</b> (what each file is named). Set a filename suffix and a package folder name if you'd like.</p>
+      </li>
+      <li>
+        <h3>Generate all</h3>
+        <p>Press <span class="ui">Generate All</span>. Clips render a few at a time and appear in the list — each one playable right away.</p>
+      </li>
+      <li>
+        <h3>Fix any line on the spot</h3>
+        <p>Not happy with a phrase? Edit the text on that row and press <span class="ui soft">Regenerate</span> to redo just that clip.</p>
+      </li>
+      <li>
+        <h3>Download the package</h3>
+        <p>Press <span class="ui">Download all</span> to get a single ready-to-ship package — a folder of your audio, bundled with its <b>meta.xlsx</b> sheet.</p>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <p class="eyebrow">Reference</p>
+    <h2>Output formats</h2>
+    <p class="muted">Choose the one your system expects. Telephony systems usually want 8&nbsp;kHz.</p>
+    <div class="table">
+      <div class="trow head"><span>Format</span><span>Best for</span></div>
+      <div class="trow"><b>PCM · 8&nbsp;kHz · mono</b><span>Telephony / IVR</span></div>
+      <div class="trow"><b>PCM · 16&nbsp;kHz · mono</b><span>Wideband voice</span></div>
+      <div class="trow"><b>PCM · 44.1&nbsp;kHz · mono</b><span>High quality</span></div>
+      <div class="trow"><b>A-law · 8&nbsp;kHz · mono</b><span>Telephony (G.711 A-law)</span></div>
+      <div class="trow"><b>µ-law · 8&nbsp;kHz · mono</b><span>Telephony (G.711 µ-law)</span></div>
+    </div>
+    <div class="note">The <b>Download all</b> package is ready to hand off as-is — the audio and its accompanying sheet are already organized inside the folder for you.</div>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="container">
+    <p class="eyebrow">Good to know</p>
+    <h2>Tips</h2>
+    <ul class="tips">
+      <li><b>Listen before you export.</b> Preview the mix so the music sits under the voice, not over it.</li>
+      <li><b>Trim long tracks.</b> Pick just the section of music you want; it loops neatly to match the speech.</li>
+      <li><b>Regenerate freely.</b> In Bulk, you can rewrite any single line and redo only that clip.</li>
+      <li><b>Name as you go.</b> The filename column and suffix decide exactly how each file is named in the package.</li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <div>TTS Studio</div>
+    <div>Text to voice, ready to ship.</div>
+  </div>
+</footer>
