@@ -120,12 +120,20 @@ def tts_elevenlabs(d, sid, tag="t"):
     model = d.get("model_id", "eleven_flash_v2_5")
     vs = {"stability": float(d.get("stability", 1.0)),
           "similarity_boost": float(d.get("similarity_boost", 1.0))}
-    if model != "eleven_v3":
+    # v3 / v4 family models don't accept style/speed voice settings
+    if not model.startswith(("eleven_v3", "eleven_v4")):
         vs["style"] = float(d.get("style", 0.0))
         vs["speed"] = float(d.get("speed", 1.0))
     url = f"{EL_BASE}/v1/text-to-speech/{voice_id}?output_format=pcm_44100"
     payload = {"text": text, "model_id": model, "voice_settings": vs,
                "apply_text_normalization": d.get("apply_text_normalization", "off")}
+    pd_id = (d.get("pron_dict_id") or "").strip()
+    if pd_id:
+        loc = {"pronunciation_dictionary_id": pd_id}
+        pd_ver = (d.get("pron_dict_version") or "").strip()
+        if pd_ver:
+            loc["version_id"] = pd_ver
+        payload["pronunciation_dictionary_locators"] = [loc]
     headers = {"xi-api-key": key, "Content-Type": "application/json"}
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=180)

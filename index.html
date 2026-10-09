@@ -105,6 +105,8 @@
           <option value="eleven_turbo_v2_5">eleven_turbo_v2_5</option>
           <option value="eleven_multilingual_v2">eleven_multilingual_v2</option>
           <option value="eleven_v3">eleven_v3</option>
+          <option value="eleven_v3_conversational">eleven_v3_conversational</option>
+          <option value="eleven_v4_turbo">eleven_v4_turbo</option>
         </select>
       </div>
     </div>
@@ -122,6 +124,12 @@
     </div>
     <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
       <input type="checkbox" id="el_norm"/><label for="el_norm" style="margin:0">Apply text normalization</label>
+    </div>
+    <div class="row">
+      <div><label>Pronunciation dictionary ID <span class="muted">(optional)</span></label>
+        <input type="text" id="el_pd_id" placeholder="e.g. 5xM3yVvZQKV0EfqQpLrJ"/></div>
+      <div><label>Dictionary version ID <span class="muted">(blank = latest)</span></label>
+        <input type="text" id="el_pd_ver" placeholder="version_id (optional)"/></div>
     </div>
     <label>API key <span class="muted">(blank = server default)</span></label>
     <input type="text" id="el_key" placeholder="xi-api-key (optional)"/>
@@ -285,6 +293,7 @@ function genSettings(){
       stability: $('el_stab').value, similarity_boost: $('el_sim').value,
       style: $('el_style').value, speed: $('el_speed').value,
       apply_text_normalization: $('el_norm').checked ? 'auto' : 'off',
+      pron_dict_id: $('el_pd_id').value, pron_dict_version: $('el_pd_ver').value,
       api_key: $('el_key').value
     });
   } else {
