@@ -211,6 +211,22 @@ def guide():
     return send_file(os.path.join(BASE_DIR, "USER_GUIDE.html"))
 
 
+# Browsers request /favicon.ico directly; the rest are referenced from the pages.
+ICONS = {"favicon.ico", "favicon.svg", "apple-touch-icon.png", "icon-512.png"}
+
+
+@app.route("/favicon.ico")
+def favicon():
+    return send_from_directory(ASSET_DIR, "favicon.ico", max_age=86400)
+
+
+@app.route("/icons/<path:fname>")
+def icons(fname):
+    if fname not in ICONS:
+        return jsonify(error="not found"), 404
+    return send_from_directory(ASSET_DIR, fname, max_age=86400)
+
+
 @app.route("/health")
 def health():
     return jsonify(ok=True, ffmpeg=FFMPEG)
