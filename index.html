@@ -284,7 +284,7 @@
 <!-- MAKE ZIP: package recordings you already have -->
 <div class="card" id="mzCard" style="display:none">
   <h2>Make ZIP</h2>
-  <div class="muted">Already have recordings? Add the folder — every audio file is converted to the format below and packaged as a MakeZip zip (audio folder + <b>meta.xlsx</b>). WAV, MP3, M4A, OGG, FLAC and other common formats work.</div>
+  <div class="muted">Already have recordings? Add the folder — every audio file is converted to the format below and packaged as a MakeZip zip (audio folder + <b>meta.xlsx</b>). WAV, MP3, M4A, OGG, FLAC and other common formats work. Conversion runs on your computer, so even hours of audio don't have to be uploaded.</div>
 
   <div id="mzDrop" class="drop">
     <div style="font-weight:590;font-size:15px">Drop a folder or audio files here</div>
@@ -661,8 +661,8 @@ $('btnBulk').addEventListener('click', async () => {
   if(ok>0){ $('zipLink').style.display='inline'; $('zipBtn').style.display='inline-block'; }
 });
 
-/* ---------------- MakeZip package download (zip + meta.xlsx) — Bulk and Make ZIP ---------------- */
-async function downloadPackage(endpoint, folderInput, st, note){
+/* ---------------- Bulk download: MakeZip package (zip + meta.xlsx) ---------------- */
+async function downloadPackage(endpoint, folderInput, st){
   const folder = sanitizeName(($(folderInput).value || '').trim()) || 'prompts';
   setStatus(st, 'Building MakeZip package…', 'busy');
   try{
@@ -673,21 +673,125 @@ async function downloadPackage(endpoint, folderInput, st, note){
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href = url; a.download = folder+'.zip';
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-    setStatus(st, '✓ Downloaded '+folder+'.zip'+(note||''), note ? 'err' : 'ok');
-    return true;
-  }catch(e){ setStatus(st, '✗ '+e.message, 'err'); return false; }
+    setStatus(st, '✓ Downloaded '+folder+'.zip', 'ok');
+  }catch(e){ setStatus(st, '✗ '+e.message, 'err'); }
 }
 const bulkPackage = e => { e.preventDefault(); downloadPackage('/api/bulk-zip', 'pkgFolder', $('stBulk')); };
 $('zipLink').addEventListener('click', bulkPackage);
 $('zipBtn').addEventListener('click', bulkPackage);
 
+/* ---------------- Make ZIP codec: WAV / G.711 / CRC-32 / zip writer (pure, no DOM) ---------------- */
+const MZ_SPECS = {   // mirrors FORMATS in app.py
+  pcm_8000:  { rate: 8000,  codec: 'pcm' },
+  pcm_16000: { rate: 16000, codec: 'pcm' },
+  pcm_44100: { rate: 44100, codec: 'pcm' },
+  alaw_8000: { rate: 8000,  codec: 'alaw' },
+  ulaw_8000: { rate: 8000,  codec: 'ulaw' },
+};
+
+// G.711 encode tables — a port of ffmpeg's build_xlaw_table (libavcodec/pcm.c), so
+// output is byte-identical to the server's ffmpeg encoder. Index: (int16 + 32768) >> 2.
+const G711 = (() => {
+  const alaw2lin = a => { a ^= 0x55; let t = a & 0x0f; const seg = (a & 0x70) >> 4;
+    t = seg ? (t + t + 1 + 32) << (seg + 2) : (t + t + 1) << 3; return (a & 0x80) ? t : -t; };
+  const ulaw2lin = u => { u = ~u & 0xff; let t = ((u & 0x0f) << 3) + 0x84; t <<= (u & 0x70) >> 4;
+    return (u & 0x80) ? (0x84 - t) : (t - 0x84); };
+  const build = (x2lin, mask) => {
+    const tab = new Uint8Array(16384); let j = 1; tab[8192] = mask;
+    for(let i = 0; i < 127; i++){
+      const v = (x2lin(i ^ mask) + x2lin((i + 1) ^ mask) + 4) >> 3;
+      for(; j < v; j++){ tab[8192 - j] = i ^ (mask ^ 0x80); tab[8192 + j] = i ^ mask; }
+    }
+    for(; j < 8192; j++){ tab[8192 - j] = 127 ^ (mask ^ 0x80); tab[8192 + j] = 127 ^ mask; }
+    tab[0] = tab[1];
+    return tab;
+  };
+  return { alaw: build(alaw2lin, 0xd5), ulaw: build(ulaw2lin, 0xff) };
+})();
+
+// Mono int16 samples -> WAV bytes laid out exactly like ffmpeg -fflags +bitexact:
+// PCM = 16-byte fmt; A-law/µ-law = 18-byte fmt + fact chunk; odd data padded.
+function mzWav(samples, spec){
+  const n = samples.length, pcm = spec.codec === 'pcm';
+  const bytes = pcm ? n * 2 : n, head = pcm ? 44 : 58;
+  const buf = new Uint8Array(head + bytes + (bytes & 1)), v = new DataView(buf.buffer);
+  const tag = (o, s) => { for(let i = 0; i < 4; i++) buf[o + i] = s.charCodeAt(i); };
+  tag(0, 'RIFF'); v.setUint32(4, buf.length - 8, true); tag(8, 'WAVE');
+  tag(12, 'fmt '); v.setUint32(16, pcm ? 16 : 18, true);
+  v.setUint16(20, pcm ? 1 : spec.codec === 'alaw' ? 6 : 7, true); v.setUint16(22, 1, true);
+  v.setUint32(24, spec.rate, true); v.setUint32(28, spec.rate * (pcm ? 2 : 1), true);
+  v.setUint16(32, pcm ? 2 : 1, true); v.setUint16(34, pcm ? 16 : 8, true);
+  if(!pcm){ v.setUint16(36, 0, true); tag(38, 'fact'); v.setUint32(42, 4, true); v.setUint32(46, n, true); }
+  tag(head - 8, 'data'); v.setUint32(head - 4, bytes, true);
+  if(pcm) for(let i = 0; i < n; i++) v.setInt16(head + 2 * i, samples[i], true);
+  else { const tab = G711[spec.codec]; for(let i = 0; i < n; i++) buf[head + i] = tab[(samples[i] + 32768) >> 2]; }
+  return buf;
+}
+
+const CRC_TAB = (() => { const t = new Uint32Array(256);
+  for(let n = 0; n < 256; n++){ let c = n; for(let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+  return t; })();
+function crc32(buf){ let c = 0xFFFFFFFF; for(let i = 0; i < buf.length; i++) c = CRC_TAB[(c ^ buf[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+
+// Store-only zip of [{name, data: Blob, size, crc}] -> Blob. Audio barely compresses,
+// so deflate would only cost time. Zip64 records appear only once a size or offset
+// reaches 4 GB (e.g. many long files at 44.1 kHz); `limit` is lowered only by tests.
+function mzZip(entries, limit = 0xFFFFFFFF){
+  const enc = new TextEncoder(), parts = [], central = [], d = new Date();
+  const time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+  const date = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  const u64 = (v, o, x) => { v.setUint32(o, x % 0x100000000, true); v.setUint32(o + 4, Math.floor(x / 0x100000000), true); };
+  const max32 = x => x >= limit ? 0xFFFFFFFF : x;
+  let offset = 0;
+  for(const e of entries){
+    const name = enc.encode(e.name), bigSize = e.size >= limit, bigOff = offset >= limit;
+    // local header (Zip64 extra must carry both sizes when either overflows)
+    const lx = bigSize ? 20 : 0, lh = new DataView(new ArrayBuffer(30 + name.length + lx));
+    lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, bigSize ? 45 : 20, true); lh.setUint16(6, 0x0800, true);
+    lh.setUint16(10, time, true); lh.setUint16(12, date, true); lh.setUint32(14, e.crc, true);
+    lh.setUint32(18, max32(e.size), true); lh.setUint32(22, max32(e.size), true);
+    lh.setUint16(26, name.length, true); lh.setUint16(28, lx, true);
+    new Uint8Array(lh.buffer).set(name, 30);
+    if(bigSize){ const o = 30 + name.length; lh.setUint16(o, 1, true); lh.setUint16(o + 2, 16, true); u64(lh, o + 4, e.size); u64(lh, o + 12, e.size); }
+    parts.push(lh, e.data);
+    // central directory entry (Zip64 extra holds only the overflowing fields, in spec order)
+    const cx = (bigSize ? 16 : 0) + (bigOff ? 8 : 0), cxLen = cx ? 4 + cx : 0, z64 = bigSize || bigOff;
+    const ch = new DataView(new ArrayBuffer(46 + name.length + cxLen));
+    ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, z64 ? 45 : 20, true); ch.setUint16(6, z64 ? 45 : 20, true);
+    ch.setUint16(8, 0x0800, true); ch.setUint16(12, time, true); ch.setUint16(14, date, true); ch.setUint32(16, e.crc, true);
+    ch.setUint32(20, max32(e.size), true); ch.setUint32(24, max32(e.size), true); ch.setUint16(28, name.length, true);
+    ch.setUint16(30, cxLen, true); ch.setUint32(42, max32(offset), true);
+    new Uint8Array(ch.buffer).set(name, 46);
+    if(cx){ let o = 46 + name.length; ch.setUint16(o, 1, true); ch.setUint16(o + 2, cx, true); o += 4;
+      if(bigSize){ u64(ch, o, e.size); u64(ch, o + 8, e.size); o += 16; }
+      if(bigOff) u64(ch, o, offset); }
+    central.push(ch);
+    offset += lh.byteLength + e.size;
+  }
+  const cdOff = offset, cdSize = central.reduce((a, c) => a + c.byteLength, 0), n = entries.length;
+  parts.push(...central);
+  if(cdOff >= limit || cdSize >= limit || n >= 0xFFFF){
+    const r = new DataView(new ArrayBuffer(76));   // Zip64 end record (56) + locator (20)
+    r.setUint32(0, 0x06064b50, true); u64(r, 4, 44); r.setUint16(12, 45, true); r.setUint16(14, 45, true);
+    u64(r, 24, n); u64(r, 32, n); u64(r, 40, cdSize); u64(r, 48, cdOff);
+    r.setUint32(56, 0x07064b50, true); u64(r, 64, cdOff + cdSize); r.setUint32(72, 1, true);
+    parts.push(r);
+  }
+  const eo = new DataView(new ArrayBuffer(22));
+  eo.setUint32(0, 0x06054b50, true); eo.setUint16(8, Math.min(n, 0xFFFF), true); eo.setUint16(10, Math.min(n, 0xFFFF), true);
+  eo.setUint32(12, max32(cdSize), true); eo.setUint32(16, max32(cdOff), true);
+  parts.push(eo);
+  return new Blob(parts, { type: 'application/zip' });
+}
+
 /* ---------------- Make ZIP: convert recordings the user already has, then package ---------------- */
 const MZ_EXTS = ['wav','mp3','m4a','aac','ogg','oga','opus','flac','wma','aif','aiff','amr','webm','3gp','caf','mp4'];
-let mzItems = [], mzBusy = false;   // {file, out, skip, td}
+let mzItems = [], mzBusy = false, mzLast = null;   // items: {file, out, skip, td}; mzLast: {blob, name}
 $('mzFmt').innerHTML = $('fmt').innerHTML;   // same choices as Export
 
 function mzSetFiles(files, folderName){
   if(mzBusy) return;
+  mzLast = null;
   const seen = new Set();
   mzItems = files
     .filter(f => !f.name.startsWith('.'))   // .DS_Store, ._resource forks
@@ -752,42 +856,98 @@ $('mzFolderInput').addEventListener('change', e => {
 });
 $('mzFilesInput').addEventListener('change', e => { const files = [...e.target.files]; e.target.value = ''; mzSetFiles(files); });
 $('mzClear').addEventListener('click', () => { if(!mzBusy) mzSetFiles([]); });
-$('mzZip').addEventListener('click', e => { e.preventDefault(); downloadPackage('/api/mz-zip', 'mzFolder', $('stMz')); });
+function mzSave(){
+  const a = document.createElement('a'), url = URL.createObjectURL(mzLast.blob);
+  a.href = url; a.download = mzLast.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);   // revoking at once can cancel a big save
+}
+$('mzZip').addEventListener('click', e => { e.preventDefault(); if(mzLast) mzSave(); });
+
+const mzDur = s => s < 60 ? s.toFixed(1) + 's'
+  : (s >= 3600 ? Math.floor(s / 3600) + ':' + String(Math.floor(s % 3600 / 60)).padStart(2, '0') : Math.floor(s / 60))
+    + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+const mzMB = b => b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB' : Math.max(1, Math.round(b / 1e6)) + ' MB';
+
+// Decode in this browser (resampled to the target rate), mix down to mono int16.
+async function mzDecode(file, rate){
+  const ctx = new OfflineAudioContext(1, 1, rate);
+  const ab = await ctx.decodeAudioData(await file.arrayBuffer());
+  const n = ab.length, chans = Array.from({length: ab.numberOfChannels}, (_, c) => ab.getChannelData(c));
+  const k = 32768 / chans.length, out = new Int16Array(n);
+  for(let i = 0; i < n; i++){
+    let s = 0; for(const c of chans) s += c[i];
+    s = Math.round(s * k); out[i] = s > 32767 ? 32767 : s < -32768 ? -32768 : s;
+  }
+  return out;
+}
+// Formats this browser can't decode (e.g. WMA, AMR) go through the server's ffmpeg.
+async function mzServerConvert(file, fmt){
+  const fd = new FormData();
+  fd.append('sid', SID); fd.append('format', fmt); fd.append('file', file, file.name);
+  const r = await fetch('/api/mz-convert', { method:'POST', body: fd });
+  let j = {}; try{ j = await r.json(); }catch(_){}
+  if(!r.ok) throw new Error(j.error || ('HTTP '+r.status));
+  const a = await fetch('/audio/' + encodeURIComponent(j.file));
+  if(!a.ok) throw new Error('HTTP ' + a.status);
+  return { bytes: new Uint8Array(await a.arrayBuffer()), duration: j.duration };
+}
 
 $('mzRun').addEventListener('click', async () => {
   const todo = mzItems.filter(it => !it.skip);
   if(!todo.length || mzBusy) return;
-  mzBusy = true;
+  mzBusy = true; mzLast = null;
   ['mzRun','mzClear','mzPickFolder','mzPickFiles'].forEach(id => $(id).disabled = true);
   $('mzZip').style.display = 'none';
   todo.forEach(it => setStatus(it.td, 'Queued…', ''));
-  const fmt = $('mzFmt').value;
-  let next = 0, done = 0, ok = 0;
+  const fmt = $('mzFmt').value, spec = MZ_SPECS[fmt];
+  const folder = sanitizeName(($('mzFolder').value || '').trim()) || 'prompts';
+  const results = new Map();   // item -> {name, data, size, crc}
+  let next = 0, done = 0, usedServer = false;
   try{
-    await postJSON('/api/mz-reset', { sid: SID });   // drop files from any previous run
     async function worker(){
       while(next < todo.length){
         const it = todo[next++];
         setStatus(it.td, 'Converting…', 'busy');
         try{
-          const fd = new FormData();
-          fd.append('sid', SID); fd.append('format', fmt); fd.append('file', it.file, it.file.name);
-          const r = await fetch('/api/mz-convert', { method:'POST', body: fd });
-          let j = {}; try{ j = await r.json(); }catch(_){}
-          if(!r.ok) throw new Error(j.error || ('HTTP '+r.status));
-          setStatus(it.td, '✓ '+j.duration+'s', 'ok'); ok++;
-        }catch(e){ setStatus(it.td, '✗ '+e.message, 'err'); }
+          let bytes, duration;
+          try{
+            if(!window.OfflineAudioContext) throw new Error('no Web Audio');
+            const samples = await mzDecode(it.file, spec.rate);
+            bytes = mzWav(samples, spec); duration = samples.length / spec.rate;
+          }catch(_){
+            if(!usedServer){ usedServer = true; await postJSON('/api/mz-reset', { sid: SID }); }
+            setStatus(it.td, 'Converting on server…', 'busy');
+            ({ bytes, duration } = await mzServerConvert(it.file, fmt));
+          }
+          results.set(it, { name: folder + '/' + it.out, data: new Blob([bytes]), size: bytes.length, crc: crc32(bytes) });
+          setStatus(it.td, '✓ ' + mzDur(duration), 'ok');
+        }catch(e){ setStatus(it.td, '✗ ' + e.message, 'err'); }
         done++;
-        setStatus($('stMz'), 'Converting '+done+' / '+todo.length+'…', 'busy');
+        setStatus($('stMz'), 'Converting ' + done + ' / ' + todo.length + '…', 'busy');
       }
     }
-    await Promise.all(Array.from({length: Math.min(3, todo.length)}, () => worker()));
-    if(ok){
-      const failed = todo.length - ok;
-      if(await downloadPackage('/api/mz-zip', 'mzFolder', $('stMz'), failed ? ' · '+failed+' failed (left out)' : ''))
-        $('mzZip').style.display = 'inline';
-    } else setStatus($('stMz'), '✗ No files could be converted.', 'err');
-  }catch(e){ setStatus($('stMz'), '✗ '+e.message, 'err'); }
+    // a decoded 44.1 kHz file holds ~0.35 MB/s of float audio — keep only one in memory at a time
+    await Promise.all(Array.from({length: Math.min(spec.rate > 16000 ? 1 : 3, todo.length)}, () => worker()));
+    if(usedServer) postJSON('/api/mz-reset', { sid: SID }).catch(() => {});   // free server disk
+
+    const entries = todo.filter(it => results.has(it)).map(it => results.get(it))
+      .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);   // same order as Bulk's server zip
+    if(!entries.length){ setStatus($('stMz'), '✗ No files could be converted.', 'err'); return; }
+    setStatus($('stMz'), 'Building ZIP…', 'busy');
+    const r = await fetch('/api/mz-meta', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ paths: entries.map(e => e.name) }) });
+    if(!r.ok){ let m = 'HTTP ' + r.status; try{ m = (await r.json()).error || m; }catch(_){} throw new Error('meta.xlsx: ' + m); }
+    const meta = new Uint8Array(await r.arrayBuffer());
+    entries.push({ name: 'meta.xlsx', data: new Blob([meta]), size: meta.length, crc: crc32(meta) });
+
+    mzLast = { blob: mzZip(entries), name: folder + '.zip' };
+    mzSave();
+    const failed = todo.length - (entries.length - 1);
+    setStatus($('stMz'), '✓ ' + mzLast.name + ' · ' + mzMB(mzLast.blob.size)
+      + (failed ? ' · ' + failed + ' failed (left out)' : ''), failed ? 'err' : 'ok');
+    $('mzZip').style.display = 'inline';
+  }catch(e){ setStatus($('stMz'), '✗ ' + e.message, 'err'); }
   finally{
     mzBusy = false;
     ['mzRun','mzClear','mzPickFolder','mzPickFiles'].forEach(id => $(id).disabled = false);

@@ -445,30 +445,38 @@ META_BILLING_URL  = "http://"
 META_OPTIONS      = "Default"
 
 
+def build_meta(paths):
+    """meta.xlsx bytes for the given in-zip paths ("<folder>/<name>.wav")."""
+    import io as _io
+    from openpyxl import Workbook
+    wb = Workbook(); ws = wb.active; ws.title = "Sheet1"
+    ws.append(META_HEADER)
+    for arc in paths:
+        ext = os.path.splitext(arc)[1] or ""
+        ws.append([arc, ext, META_EXPIRE, META_CONTENT_PROV, META_CATEGORY, META_LABEL,
+                   META_LANGUAGE, META_SONG_CODE, META_SONG_NAME, META_COUNTRY_COL,
+                   META_OPERATOR_COL, META_DOWNLOAD_URL, META_CRBT_URL, META_BILLING_URL,
+                   META_OPTIONS])
+    mbuf = _io.BytesIO(); wb.save(mbuf)
+    return mbuf.getvalue()
+
+
 def make_package(prefix, folder):
     """Zip every GEN_DIR file named <prefix><name>.wav as <folder>/<name>.wav plus a
     meta.xlsx manifest. Returns a BytesIO, or None if there are no files."""
     import zipfile, io as _io
-    from openpyxl import Workbook
     files = sorted(f for f in os.listdir(GEN_DIR) if f.startswith(prefix) and f.endswith(".wav"))
     if not files:
         return None
 
     zbuf = _io.BytesIO()
+    paths = []
     with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as z:
-        wb = Workbook(); ws = wb.active; ws.title = "Sheet1"
-        ws.append(META_HEADER)
         for f in files:
-            dl = f[len(prefix):]
-            arc = f"{folder}/{dl}"
+            arc = f"{folder}/{f[len(prefix):]}"
             z.write(os.path.join(GEN_DIR, f), arcname=arc)
-            ext = os.path.splitext(dl)[1] or ""
-            ws.append([arc, ext, META_EXPIRE, META_CONTENT_PROV, META_CATEGORY, META_LABEL,
-                       META_LANGUAGE, META_SONG_CODE, META_SONG_NAME, META_COUNTRY_COL,
-                       META_OPERATOR_COL, META_DOWNLOAD_URL, META_CRBT_URL, META_BILLING_URL,
-                       META_OPTIONS])
-        mbuf = _io.BytesIO(); wb.save(mbuf); mbuf.seek(0)
-        z.writestr("meta.xlsx", mbuf.read())
+            paths.append(arc)
+        z.writestr("meta.xlsx", build_meta(paths))
     zbuf.seek(0)
     return zbuf
 
@@ -485,8 +493,11 @@ def bulk_zip():
 
 
 # ---------------------------------------------------------------------------
-# Make ZIP: convert already-recorded audio and package it (no TTS involved).
-# Files live under their own "<sid>_mz__" prefix so they never mix with Bulk output.
+# Make ZIP: package already-recorded audio (no TTS involved).
+# The browser decodes, converts and zips — shipping hours of audio to a small
+# instance and zipping it in memory doesn't scale. The server only writes
+# meta.xlsx and converts files the browser can't decode, under a "<sid>_mz__"
+# prefix so they never mix with Bulk output.
 # ---------------------------------------------------------------------------
 MZ_EXTS = {".wav", ".mp3", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".flac", ".wma",
            ".aif", ".aiff", ".amr", ".webm", ".3gp", ".caf", ".mp4"}
@@ -558,15 +569,14 @@ def mz_convert():
     return jsonify(file=out_name, download_name=f"{base}.wav", duration=riff_duration(out_path))
 
 
-@app.route("/api/mz-zip", methods=["POST"])
-def mz_zip():
-    d = request.get_json(force=True)
-    sid = clean_sid(d.get("sid"))
-    folder = safe_name(d.get("folder") or "prompts")
-    zbuf = make_package(mz_prefix(sid), folder)
-    if zbuf is None:
-        return jsonify(error="No converted files yet."), 400
-    return send_file(zbuf, mimetype="application/zip", as_attachment=True, download_name=folder + ".zip")
+@app.route("/api/mz-meta", methods=["POST"])
+def mz_meta():
+    paths = (request.get_json(force=True) or {}).get("paths")
+    if (not isinstance(paths, list) or not paths or len(paths) > 20000
+            or not all(isinstance(x, str) and 0 < len(x) <= 500 for x in paths)):
+        return jsonify(error="Expected a list of file paths."), 400
+    return send_file(io.BytesIO(build_meta(paths)), as_attachment=True, download_name="meta.xlsx",
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 @app.route("/api/download/<path:fname>")
