@@ -445,18 +445,14 @@ META_BILLING_URL  = "http://"
 META_OPTIONS      = "Default"
 
 
-@app.route("/api/bulk-zip", methods=["POST"])
-def bulk_zip():
+def make_package(prefix, folder):
+    """Zip every GEN_DIR file named <prefix><name>.wav as <folder>/<name>.wav plus a
+    meta.xlsx manifest. Returns a BytesIO, or None if there are no files."""
     import zipfile, io as _io
     from openpyxl import Workbook
-    d = request.get_json(force=True)
-    sid = clean_sid(d.get("sid"))
-    folder = safe_name(d.get("folder") or "prompts")
-
-    prefix = f"{sid}__"
     files = sorted(f for f in os.listdir(GEN_DIR) if f.startswith(prefix) and f.endswith(".wav"))
     if not files:
-        return jsonify(error="No generated files yet."), 400
+        return None
 
     zbuf = _io.BytesIO()
     with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as z:
@@ -473,8 +469,103 @@ def bulk_zip():
                        META_OPTIONS])
         mbuf = _io.BytesIO(); wb.save(mbuf); mbuf.seek(0)
         z.writestr("meta.xlsx", mbuf.read())
-
     zbuf.seek(0)
+    return zbuf
+
+
+@app.route("/api/bulk-zip", methods=["POST"])
+def bulk_zip():
+    d = request.get_json(force=True)
+    sid = clean_sid(d.get("sid"))
+    folder = safe_name(d.get("folder") or "prompts")
+    zbuf = make_package(f"{sid}__", folder)
+    if zbuf is None:
+        return jsonify(error="No generated files yet."), 400
+    return send_file(zbuf, mimetype="application/zip", as_attachment=True, download_name=folder + ".zip")
+
+
+# ---------------------------------------------------------------------------
+# Make ZIP: convert already-recorded audio and package it (no TTS involved).
+# Files live under their own "<sid>_mz__" prefix so they never mix with Bulk output.
+# ---------------------------------------------------------------------------
+MZ_EXTS = {".wav", ".mp3", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".flac", ".wma",
+           ".aif", ".aiff", ".amr", ".webm", ".3gp", ".caf", ".mp4"}
+
+
+def mz_prefix(sid):
+    return f"{sid}_mz__"
+
+
+def riff_duration(path):
+    """Duration of any WAV, including A-law / µ-law, which the wave module can't open."""
+    byte_rate = data = None
+    with open(path, "rb") as fh:
+        fh.seek(12)
+        while True:
+            hdr = fh.read(8)
+            if len(hdr) < 8:
+                break
+            cid, size = hdr[:4], int.from_bytes(hdr[4:], "little")
+            if cid == b"fmt ":
+                byte_rate = int.from_bytes(fh.read(size)[8:12], "little")
+                fh.seek(size & 1, 1)
+            elif cid == b"data":
+                data = size
+                break
+            else:
+                fh.seek(size + (size & 1), 1)
+    return round(data / byte_rate, 2) if data and byte_rate else 0.0
+
+
+@app.route("/api/mz-reset", methods=["POST"])
+def mz_reset():
+    prefix = mz_prefix(clean_sid(request.get_json(force=True).get("sid")))
+    for f in os.listdir(GEN_DIR):
+        if f.startswith(prefix):
+            try: os.remove(os.path.join(GEN_DIR, f))
+            except OSError: pass
+    return jsonify(ok=True)
+
+
+@app.route("/api/mz-convert", methods=["POST"])
+def mz_convert():
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify(error="No file uploaded."), 400
+    sid = clean_sid(request.form.get("sid"))
+    fmt = request.form.get("format", "pcm_8000")
+    if fmt not in FORMATS:
+        return jsonify(error=f"Unknown format {fmt}."), 400
+    base, ext = os.path.splitext(re.split(r"[\\/]", f.filename)[-1])
+    ext = ext.lower()
+    if ext not in MZ_EXTS:
+        return jsonify(error=f"Not an audio file ({ext or 'no extension'})."), 400
+    base = safe_name(base)
+
+    tmp = os.path.join(GEN_DIR, f"{sid}_mzin_{uuid.uuid4().hex[:8]}{ext}")
+    out_name = f"{mz_prefix(sid)}{base}.wav"
+    out_path = os.path.join(GEN_DIR, out_name)
+    f.save(tmp)
+    try:
+        cmd = ([FFMPEG, "-y", "-i", tmp, "-vn", "-map_metadata", "-1"] + FORMATS[fmt]
+               + ["-fflags", "+bitexact", out_path])
+        p = subprocess.run(cmd, capture_output=True, text=True)
+    finally:
+        try: os.remove(tmp)
+        except OSError: pass
+    if p.returncode != 0:
+        return jsonify(error="Could not convert — the file may be damaged or not audio."), 400
+    return jsonify(file=out_name, download_name=f"{base}.wav", duration=riff_duration(out_path))
+
+
+@app.route("/api/mz-zip", methods=["POST"])
+def mz_zip():
+    d = request.get_json(force=True)
+    sid = clean_sid(d.get("sid"))
+    folder = safe_name(d.get("folder") or "prompts")
+    zbuf = make_package(mz_prefix(sid), folder)
+    if zbuf is None:
+        return jsonify(error="No converted files yet."), 400
     return send_file(zbuf, mimetype="application/zip", as_attachment=True, download_name=folder + ".zip")
 
 
