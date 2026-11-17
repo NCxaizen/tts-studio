@@ -284,7 +284,7 @@
 <!-- MAKE ZIP: package recordings you already have -->
 <div class="card" id="mzCard" style="display:none">
   <h2>Make ZIP</h2>
-  <div class="muted">Already have recordings? Add the folder — every audio file is converted to the format below and packaged as a MakeZip zip (audio folder + <b>meta.xlsx</b>). WAV, MP3, M4A, OGG, FLAC and other common formats work. Conversion runs on your computer, so even hours of audio don't have to be uploaded.</div>
+  <div class="muted">Already have recordings? Add the folder — every audio file is converted to the format below and packaged as a MakeZip zip (audio folder + <b>meta.xlsx</b>). WAV, MP3, M4A, OGG, FLAC and other common formats work. Subfolders are kept as they are, and names are cleaned to letters, numbers and <b>_</b> only. Conversion runs on your computer, so even hours of audio don't have to be uploaded.</div>
 
   <div id="mzDrop" class="drop">
     <div style="font-weight:590;font-size:15px">Drop a folder or audio files here</div>
@@ -786,32 +786,51 @@ function mzZip(entries, limit = 0xFFFFFFFF){
 
 /* ---------------- Make ZIP: convert recordings the user already has, then package ---------------- */
 const MZ_EXTS = ['wav','mp3','m4a','aac','ogg','oga','opus','flac','wma','aif','aiff','amr','webm','3gp','caf','mp4'];
-let mzItems = [], mzBusy = false, mzLast = null;   // items: {file, out, skip, td}; mzLast: {blob, name}
+let mzItems = [], mzBusy = false, mzLast = null;   // items: {file, rel, ext, out, key, skip, td}; mzLast: {blob, name}
 $('mzFmt').innerHTML = $('fmt').innerHTML;   // same choices as Export
 
-function mzSetFiles(files, folderName){
+// Make ZIP names allow only ASCII letters, digits and underscore: accents fold (é -> e),
+// any other run of characters becomes one "_", and edge underscores are trimmed.
+const mzClean = s => s.normalize('NFKD').replace(/[̀-ͯ]/g, '')
+  .replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+
+// list: [{file, rel}] where rel is the path as picked ("Root/Sub/Lesson - 1.mp3").
+// root: the picked folder's name — it becomes the package folder, so it's dropped from rel.
+function mzSetFiles(list, root){
   if(mzBusy) return;
   mzLast = null;
-  const seen = new Set();
-  mzItems = files
-    .filter(f => !f.name.startsWith('.'))   // .DS_Store, ._resource forks
-    .sort((a, b) => (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name, undefined, {numeric:true}))
-    .map(file => {
-      const dot = file.name.lastIndexOf('.');
-      const ext = dot > 0 ? file.name.slice(dot + 1).toLowerCase() : '';
-      const out = (sanitizeName((dot > 0 ? file.name.slice(0, dot) : file.name).trim()) || 'output') + '.wav';
-      let skip = '';
-      if(!MZ_EXTS.includes(ext)) skip = 'Skipped — not audio';
-      else if(seen.has(out.toLowerCase())) skip = 'Skipped — duplicate name';
-      else seen.add(out.toLowerCase());
-      return { file, out, skip };
+  const used = new Set(), dirs = new Map();   // taken output paths (lower-case); original dir -> cleaned dir
+  const unique = (base, ext) => {   // cleaning can merge names ("A-1", "A 1"): number the later ones
+    let p = base + ext; for(let k = 2; used.has(p.toLowerCase()); k++) p = base + '_' + k + ext;
+    used.add(p.toLowerCase()); return p;
+  };
+  const cleanDir = parts => {
+    let out = '';
+    parts.forEach((d, i) => {
+      const key = parts.slice(0, i + 1).join('/');
+      if(!dirs.has(key)) dirs.set(key, unique((out ? out + '/' : '') + (mzClean(d) || 'folder'), ''));
+      out = dirs.get(key);
     });
-  if(folderName) $('mzFolder').value = sanitizeName(folderName) || 'prompts';
+    return out;
+  };
+  mzItems = list
+    .map(({file, rel}) => ({ file, rel: root && rel.startsWith(root + '/') ? rel.slice(root.length + 1) : rel }))
+    .filter(({rel}) => !rel.split('/').some(p => p.startsWith('.') || p === '__MACOSX'))   // .DS_Store, ._forks, hidden dirs
+    .sort((a, b) => a.rel.localeCompare(b.rel, undefined, {numeric: true}))
+    .map(({file, rel}, i) => {
+      const parts = rel.split('/'), name = parts.pop(), dot = name.lastIndexOf('.');
+      const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+      if(!MZ_EXTS.includes(ext)) return { file, rel, ext, skip: 'Skipped — not audio' };
+      const dir = cleanDir(parts);
+      const out = unique((dir ? dir + '/' : '') + (mzClean(dot > 0 ? name.slice(0, dot) : name) || 'file'), '.wav');
+      return { file, rel, ext, out, key: 'f' + i, skip: '' };
+    });
+  if(root) $('mzFolder').value = mzClean(root) || 'prompts';
 
   const tbody = $('mzRows'); tbody.innerHTML = '';
   mzItems.forEach(it => {
     const tr = document.createElement('tr'); if(it.skip) tr.className = 'skip';
-    [it.file.webkitRelativePath || it.file.name, it.skip ? '—' : it.out, it.skip || 'Ready'].forEach(t => {
+    [it.rel, it.skip ? '—' : it.out, it.skip || 'Ready'].forEach(t => {
       const td = document.createElement('td'); td.textContent = t; tr.appendChild(td);
     });
     it.td = tr.lastChild;
@@ -827,7 +846,7 @@ function mzSetFiles(files, folderName){
 
 // folder drag-and-drop: walk directory entries (readEntries returns in batches)
 async function mzWalk(entry, out){
-  if(entry.isFile){ out.push(await new Promise((res, rej) => entry.file(res, rej))); return; }
+  if(entry.isFile){ out.push({ file: await new Promise((res, rej) => entry.file(res, rej)), rel: entry.fullPath.replace(/^\/+/, '') }); return; }
   if(!entry.isDirectory) return;
   const reader = entry.createReader();
   for(let batch; (batch = await new Promise((res, rej) => reader.readEntries(res, rej))).length; )
@@ -842,7 +861,7 @@ drop.addEventListener('drop', async e => {
   e.preventDefault();
   // grab entries synchronously — DataTransfer is emptied once this handler awaits
   const entries = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
-  if(!entries.length){ mzSetFiles([...e.dataTransfer.files]); return; }
+  if(!entries.length){ mzSetFiles([...e.dataTransfer.files].map(file => ({ file, rel: file.name }))); return; }
   const files = [];
   try{ for(const en of entries) await mzWalk(en, files); }
   catch(err){ setStatus($('stMz'), '✗ Could not read the dropped folder: '+err.message, 'err'); return; }
@@ -851,10 +870,13 @@ drop.addEventListener('drop', async e => {
 $('mzPickFolder').addEventListener('click', () => $('mzFolderInput').click());
 $('mzPickFiles').addEventListener('click', () => $('mzFilesInput').click());
 $('mzFolderInput').addEventListener('change', e => {
-  const files = [...e.target.files]; e.target.value = '';
-  mzSetFiles(files, files.length ? files[0].webkitRelativePath.split('/')[0] : '');
+  const list = [...e.target.files].map(file => ({ file, rel: file.webkitRelativePath || file.name })); e.target.value = '';
+  mzSetFiles(list, list.length ? list[0].rel.split('/')[0] : '');
 });
-$('mzFilesInput').addEventListener('change', e => { const files = [...e.target.files]; e.target.value = ''; mzSetFiles(files); });
+$('mzFilesInput').addEventListener('change', e => {
+  const list = [...e.target.files].map(file => ({ file, rel: file.name })); e.target.value = '';
+  mzSetFiles(list);
+});
 $('mzClear').addEventListener('click', () => { if(!mzBusy) mzSetFiles([]); });
 function mzSave(){
   const a = document.createElement('a'), url = URL.createObjectURL(mzLast.blob);
@@ -882,9 +904,9 @@ async function mzDecode(file, rate){
   return out;
 }
 // Formats this browser can't decode (e.g. WMA, AMR) go through the server's ffmpeg.
-async function mzServerConvert(file, fmt){
-  const fd = new FormData();
-  fd.append('sid', SID); fd.append('format', fmt); fd.append('file', file, file.name);
+async function mzServerConvert(it, fmt){
+  const fd = new FormData();   // unique upload name: same-named files in different folders can't collide on the server
+  fd.append('sid', SID); fd.append('format', fmt); fd.append('file', it.file, it.key + '.' + it.ext);
   const r = await fetch('/api/mz-convert', { method:'POST', body: fd });
   let j = {}; try{ j = await r.json(); }catch(_){}
   if(!r.ok) throw new Error(j.error || ('HTTP '+r.status));
@@ -901,7 +923,8 @@ $('mzRun').addEventListener('click', async () => {
   $('mzZip').style.display = 'none';
   todo.forEach(it => setStatus(it.td, 'Queued…', ''));
   const fmt = $('mzFmt').value, spec = MZ_SPECS[fmt];
-  const folder = sanitizeName(($('mzFolder').value || '').trim()) || 'prompts';
+  const folder = mzClean($('mzFolder').value || '') || 'prompts';
+  $('mzFolder').value = folder;   // show the name the zip will actually use
   const results = new Map();   // item -> {name, data, size, crc}
   let next = 0, done = 0, usedServer = false;
   try{
@@ -918,7 +941,7 @@ $('mzRun').addEventListener('click', async () => {
           }catch(_){
             if(!usedServer){ usedServer = true; await postJSON('/api/mz-reset', { sid: SID }); }
             setStatus(it.td, 'Converting on server…', 'busy');
-            ({ bytes, duration } = await mzServerConvert(it.file, fmt));
+            ({ bytes, duration } = await mzServerConvert(it, fmt));
           }
           results.set(it, { name: folder + '/' + it.out, data: new Blob([bytes]), size: bytes.length, crc: crc32(bytes) });
           setStatus(it.td, '✓ ' + mzDur(duration), 'ok');
